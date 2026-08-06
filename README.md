@@ -57,10 +57,10 @@
 </details>
 
 ## 使用
-两种限流算法，自带六种限制对象，具体使用细节请阅读 docstring 。
+四种限流算法，自带六种限制对象，具体使用细节请阅读 docstring 。
 ```python
-from nonebot_plugin_limiter import Cooldown, SlidingWindowCooldown
 from nonebot_plugin_limiter import (
+    Cooldown, LeakyBucketCooldown, SlidingWindowCooldown, TokenBucketCooldown,
     GlobalScope, UserScope, SceneScope, UserSceneScope, PrivateScope, PublicScope
 )
 ```
