@@ -57,6 +57,16 @@ def _calculate_continuous_recovery(
     return recovered, last_update_time + timedelta(seconds=recovered / speed)
 
 
+def _validate_positive(name: str, value: float) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than zero")
+
+
+def _validate_non_negative(name: str, value: int) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+
+
 def _entity_id_dep_wrapper(entity: CooldownEntity | _DependentCallable[str]) -> _DependentCallable[str]:
     if isinstance(entity, CooldownEntity):
         entity_id_dep = entity.get_entity_id
@@ -134,12 +144,13 @@ def Cooldown(
 
         period (int | datetime.timedelta | str):
             设置速率限制的重置时间。
-            - 若为 `int` 或 `datetime.timedelta`，表示周期开始后经过指定时间后重置限制。
+            - 若为 `int` 或 `datetime.timedelta`，表示周期开始后经过指定时间后重置限制，且必须大于零。
             - 若为 `str`，应为合法的 cron 表达式，表示按计划任务方式重置限制。
 
         limit (int | _DependentCallable[int]):
             可选，设置在每个周期内允许的最大触发次数。默认为 5。
             - 可传入返回值为 `int` 的函数，自定义最大触发次数，支持依赖注入。
+            - 静态值和依赖注入返回值都不能为负数。
 
         reject (None | SupportMsgType | _DependentCallable):
             可选，当超出限制时的响应行为。默认为 `None`。
@@ -153,6 +164,9 @@ def Cooldown(
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Raises:
+        ValueError: 当非 cron 周期不大于零，或静态、动态 `limit` 为负数时抛出。
 
     示例:
     ```python
@@ -172,13 +186,17 @@ def Cooldown(
     ```
     """
 
+    if isinstance(limit, int):
+        _validate_non_negative("limit", limit)
+
     if isinstance(period, str):
         trigger = CronTrigger.from_crontab(period)
     else:
         if isinstance(period, timedelta):
-            interval_length = int(period.total_seconds())
+            interval_length = period.total_seconds()
         else:
             interval_length = period
+        _validate_positive("period", interval_length)
         trigger = IntervalTrigger(seconds=interval_length)
     trigger = cast(BaseTrigger, trigger)
 
@@ -197,6 +215,7 @@ def Cooldown(
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
+        _validate_non_negative("limit", limit)
 
         now = datetime.now(tz=_tz)
 
@@ -258,11 +277,12 @@ def SlidingWindowCooldown(
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         period (int | datetime.timedelta):
-            设置滑动窗口的时间长度。
+            设置滑动窗口的时间长度，且必须大于零。
 
         limit (int | _DependentCallable[int]):
             可选，设置在每个滑动窗口周期内允许的最大触发次数。默认为 5。
             - 可传入返回值为 `int` 的函数，自定义最大触发次数，支持依赖注入。
+            - 静态值和依赖注入返回值都不能为负数。
 
         reject (None | SupportMsgType):
             可选，当超出限制时的响应行为。默认为 `None`。
@@ -276,6 +296,9 @@ def SlidingWindowCooldown(
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Raises:
+        ValueError: 当周期不大于零，或静态、动态 `limit` 为负数时抛出。
 
     示例:
     ```python
@@ -295,10 +318,14 @@ def SlidingWindowCooldown(
     ```
     """
 
+    if isinstance(limit, int):
+        _validate_non_negative("limit", limit)
+
     if isinstance(period, timedelta):
-        window_length = int(period.total_seconds())
+        window_length = period.total_seconds()
     else:
-        window_length = int(period)
+        window_length = period
+    _validate_positive("period", window_length)
 
     if isinstance(name, str):
         bucket = _SlidingWindowCooldownDict.setdefault(name, {})
@@ -313,6 +340,7 @@ def SlidingWindowCooldown(
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
+        _validate_non_negative("limit", limit)
 
         now = datetime.now(tz=_tz)
 
@@ -375,14 +403,15 @@ def LeakyBucketCooldown(
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):
-            设置漏桶的最大容量。
+            设置漏桶的最大容量，且不能为负数。
 
         leak_speed (int):
-            设置漏桶每秒的漏水量。
+            设置漏桶每秒的漏水量，且不能为负数。
 
         pour_size (int, _DependentCallable[int]):
             可选，设置每次添加任务时倒入的水量。默认为 10。
             - 可传入返回值为 `int` 的函数，自定义注入水量，支持依赖注入。
+            - 静态值和依赖注入返回值都不能为负数。
 
         reject (None | SupportMsgType | _DependentCallable):
             可选，当超出限制时的响应行为。默认为 `None`。
@@ -396,6 +425,9 @@ def LeakyBucketCooldown(
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Raises:
+        ValueError: 当容量、恢复速度或静态、动态单次注入量为负数时抛出。
 
     示例:
     ```python
@@ -416,6 +448,11 @@ def LeakyBucketCooldown(
     ```
     """
 
+    _validate_non_negative("capacity", capacity)
+    _validate_non_negative("leak_speed", leak_speed)
+    if isinstance(pour_size, int):
+        _validate_non_negative("pour_size", pour_size)
+
     if isinstance(name, str):
         if name not in _LeakyBucketCooldownDict.keys():
             _LeakyBucketCooldownDict[name] = {}
@@ -431,6 +468,7 @@ def LeakyBucketCooldown(
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
+        _validate_non_negative("pour_size", pour_size)
 
         now = datetime.now(tz=_tz)
 
@@ -497,14 +535,15 @@ def TokenBucketCooldown(
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):
-            设置令牌桶的最大容量。
+            设置令牌桶的最大容量，且不能为负数。
 
         add_speed (int):
-            设置令牌桶每秒添加 token 的数量。
+            设置令牌桶每秒添加 token 的数量，且不能为负数。
 
         consume_size (int, _DependentCallable[int]):
             可选，设置每次添加任务时需要消耗的 token 数量。默认为 10。
             - 可传入返回值为 `int` 的函数，自定义消耗数量，支持依赖注入。
+            - 静态值和依赖注入返回值都不能为负数。
 
         reject (None | SupportMsgType | _DependentCallable):
             可选，当超出限制时的响应行为。默认为 `None`。
@@ -518,6 +557,9 @@ def TokenBucketCooldown(
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Raises:
+        ValueError: 当容量、恢复速度或静态、动态单次消费量为负数时抛出。
 
     示例:
     ```python
@@ -538,6 +580,11 @@ def TokenBucketCooldown(
     ```
     """
 
+    _validate_non_negative("capacity", capacity)
+    _validate_non_negative("add_speed", add_speed)
+    if isinstance(consume_size, int):
+        _validate_non_negative("consume_size", consume_size)
+
     if isinstance(name, str):
         if name not in _TokenBucketCooldownDict.keys():
             _TokenBucketCooldownDict[name] = {}
@@ -553,6 +600,7 @@ def TokenBucketCooldown(
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
+        _validate_non_negative("consume_size", consume_size)
 
         now = datetime.now(tz=_tz)
 
