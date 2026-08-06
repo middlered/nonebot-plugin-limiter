@@ -19,7 +19,9 @@ __plugin_meta__ = PluginMetadata(
 )
 
 from .cooldown import Cooldown as Cooldown
+from .cooldown import LeakyBucketCooldown as LeakyBucketCooldown
 from .cooldown import SlidingWindowCooldown as SlidingWindowCooldown
+from .cooldown import TokenBucketCooldown as TokenBucketCooldown
 from .entity import BYPASS_ENTITY as BYPASS_ENTITY
 from .entity import CooldownEntity as CooldownEntity
 from .entity import GlobalScope as GlobalScope
