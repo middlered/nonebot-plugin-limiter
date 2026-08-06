@@ -25,6 +25,38 @@ _tz = get_localzone()
 SupportMsgType = str | Message | MessageSegment | MessageTemplate | UniMessage
 
 
+def _calculate_continuous_recovery(
+    last_update_time: datetime,
+    now: datetime,
+    speed: int,
+    recoverable_capacity: int,
+) -> tuple[int, datetime]:
+    """计算连续桶本次可兑现的恢复量和新的时间基准。
+
+    Args:
+        last_update_time: 上次恢复后尚未兑现的时间起点。
+        now: 本次检查时间。
+        speed: 每秒恢复的整数单位数。
+        recoverable_capacity: 当前距离空桶或满桶边界还可恢复的单位数。
+
+    Returns:
+        本次恢复的整数单位数与新的时间基准。达到饱和边界时丢弃更早的时间债务；
+        尚不足一个恢复单位时保留原时间基准。
+    """
+
+    if speed <= 0 or recoverable_capacity <= 0:
+        return 0, now if recoverable_capacity <= 0 else last_update_time
+
+    elapsed_seconds = max((now - last_update_time).total_seconds(), 0)
+    recovered = min(int(elapsed_seconds * speed), recoverable_capacity)
+
+    if recovered == recoverable_capacity:
+        return recovered, now
+    if recovered == 0:
+        return 0, last_update_time
+    return recovered, last_update_time + timedelta(seconds=recovered / speed)
+
+
 def _entity_id_dep_wrapper(entity: CooldownEntity | _DependentCallable[str]) -> _DependentCallable[str]:
     if isinstance(entity, CooldownEntity):
         entity_id_dep = entity.get_entity_id
@@ -406,10 +438,13 @@ def LeakyBucketCooldown(
             bucket[entity_id] = LeakyBucketUsage(now, capacity, capacity)
         usage = bucket[entity_id]
 
-        # Update bucket available capacity
-        leaked_size = int((now - usage.last_update_time).total_seconds()) * leak_speed
+        leaked_size, usage.last_update_time = _calculate_continuous_recovery(
+            usage.last_update_time,
+            now,
+            leak_speed,
+            usage.used,
+        )
         usage.used = max(usage.used - leaked_size, 0)
-        usage.last_update_time = now
 
         def _increase_action():
             usage.used += pour_size
@@ -525,10 +560,13 @@ def TokenBucketCooldown(
             bucket[entity_id] = TokenBucketUsage(now, capacity, 0)
         usage = bucket[entity_id]
 
-        # Update bucket token count
-        resume_size = int((now - usage.last_update_time).total_seconds()) * add_speed
-        usage.available = min(resume_size + usage.available, usage.capacity)
-        usage.last_update_time = now
+        resume_size, usage.last_update_time = _calculate_continuous_recovery(
+            usage.last_update_time,
+            now,
+            add_speed,
+            usage.capacity - usage.available,
+        )
+        usage.available = min(usage.available + resume_size, usage.capacity)
 
         def _increase_action():
             usage.available -= consume_size
