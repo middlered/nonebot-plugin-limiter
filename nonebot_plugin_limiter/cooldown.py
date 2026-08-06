@@ -406,13 +406,17 @@ def LeakyBucketCooldown(
         now = datetime.now(tz=_tz)
 
         if entity_id not in bucket:
-            bucket[entity_id] = LeakyBucketUsage(now, capacity, capacity)
+            bucket[entity_id] = LeakyBucketUsage(now, capacity, 0)
         usage = bucket[entity_id]
 
         # Update bucket available capacity
-        leaked_size = int((now - usage.last_update_time).total_seconds()) * leak_speed
+        elapsed_seconds = max((now - usage.last_update_time).total_seconds(), 0)
+        leaked_size = min(int(elapsed_seconds * leak_speed), usage.used) if leak_speed > 0 else 0
+        if leaked_size == usage.used:
+            usage.last_update_time = now
+        elif leaked_size > 0:
+            usage.last_update_time += timedelta(seconds=leaked_size / leak_speed)
         usage.used = max(usage.used - leaked_size, 0)
-        usage.last_update_time = now
 
         def _increase_action():
             usage.used += pour_size
@@ -525,13 +529,18 @@ def TokenBucketCooldown(
         now = datetime.now(tz=_tz)
 
         if entity_id not in bucket:
-            bucket[entity_id] = TokenBucketUsage(now, capacity, 0)
+            bucket[entity_id] = TokenBucketUsage(now, capacity, capacity)
         usage = bucket[entity_id]
 
         # Update bucket token count
-        resume_size = int((now - usage.last_update_time).total_seconds()) * add_speed
-        usage.available = min(resume_size + usage.available, usage.capacity)
-        usage.last_update_time = now
+        elapsed_seconds = max((now - usage.last_update_time).total_seconds(), 0)
+        recoverable_capacity = usage.capacity - usage.available
+        resume_size = min(int(elapsed_seconds * add_speed), recoverable_capacity) if add_speed > 0 else 0
+        if resume_size == recoverable_capacity:
+            usage.last_update_time = now
+        elif resume_size > 0:
+            usage.last_update_time += timedelta(seconds=resume_size / add_speed)
+        usage.available = min(usage.available + resume_size, usage.capacity)
 
         def _increase_action():
             usage.available -= consume_size
