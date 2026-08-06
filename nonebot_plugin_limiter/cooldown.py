@@ -172,30 +172,21 @@ def Cooldown(
             bucket[entity_id] = FixWindowUsage(now, limit)
         usage = bucket[entity_id]
 
-        def _increase_action(reset: bool = True):
-            if reset:
-                usage.start_time = now
-                usage.available = limit
+        reset_time = trigger.get_next_fire_time(usage.start_time, now)
+        assert reset_time is not None, "reset_time should not be None"
+        if now >= reset_time:
+            usage.start_time = now
+            usage.available = limit
+
+        def _increase_action():
             usage.available -= 1
 
         if usage.available > 0:
             if set_increaser:
-                inject_increaser(state, partial(_increase_action, False))
-            else:
-                _increase_action(False)
-            return
-
-        # Calculate reset time based on when the limitation was set
-        reset_time = trigger.get_next_fire_time(usage.start_time, now)
-        assert reset_time is not None, "reset_time should not be None"
-
-        # Reset
-        if now >= reset_time:
-            if set_increaser:
                 inject_increaser(state, _increase_action)
             else:
                 _increase_action()
-            return  # Didn't exceed
+            return
 
         # Exceeded
         await reject_cb()
