@@ -150,7 +150,18 @@ cmd2 = on_startswith("cmd2")
 async def _(): ...
 ```
 
-手动管理限制器使用记录的增加操作，适用于没有成功完成事件处理时避免给用户添加限制。
+手动确认限制器使用记录，适用于没有成功完成事件处理时避免给用户添加限制。启用后，限制器会在放行时
+预占额度；业务成功时调用一次 `Increaser.execute()`，会确认当前 Matcher 中的全部预占，并在提交发生时
+正式计数。未确认的预占会在 Matcher 结束时自动释放，成功提交后重复调用 `execute()` 不会重复计数。
+命中 `BYPASS_ENTITY` 或当前没有待确认预占时仍可注入 `Increaser`，此时 `execute()` 不会产生计数；只有
+当前 Matcher 没有运行任何启用 `set_increaser` 的限制器时，注入才会抛出 `KeyError`。
+
+同步 `def` Handler 也可以直接调用 `execute()`，内部会把提交送回 NoneBot 事件循环完成后再返回。预占会
+一直占用额度直到确认或 Matcher 结束，因此长时间业务处理会相应减少其他请求的可用额度。预占不会跨
+`matcher.pause()` 保留；需要等待后续事件时，应把启用 `set_increaser` 的限制器和 `execute()` 放在恢复后
+最终执行业务的同一个 Handler 中。Matcher 已经释放预占后，迟到的 `execute()` 会抛出 `RuntimeError`。
+
+预占和并发上限只在单个 NoneBot 进程内协调；多 worker 部署会各自拥有额度。
 ```python
 from nonebot_plugin_limiter import Increaser
 
