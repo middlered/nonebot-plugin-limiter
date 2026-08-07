@@ -115,7 +115,12 @@ def load_usage_data() -> None:
 def save_usage_data() -> None:
     """保存用量数据到本地"""
 
-    j = {"fix_window": {}, "sliding_window": {}}
+    j = {
+        "fix_window": {},
+        "sliding_window": {},
+        "leaky_bucket": {},
+        "token_bucket": {},
+    }
 
     for name, usage_set in _FixWindowCooldownDict.items():
         j["fix_window"][name] = {
@@ -154,7 +159,8 @@ def save_usage_data() -> None:
             for _id, usage in usage_set.items()
         }
 
-    plugin_data_file.write_text(json.dumps(j))
+    data = PersistData.model_validate(j)
+    plugin_data_file.write_text(json.dumps(data.model_dump()))
 
 @driver.on_startup
 def _startup() -> None:
