@@ -516,7 +516,7 @@ def LeakyBucketCooldown(
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):
-            设置漏桶的最大容量，且不能为负数。
+            设置漏桶的最大容量，且不能为负数。新实体从空桶开始。
 
         leak_speed (int):
             设置漏桶每秒的漏水量，且不能为负数。
@@ -596,7 +596,7 @@ def LeakyBucketCooldown(
         if name is not None:
             key = _named_bucket_key("leaky", name, entity_id)
             lock = named_bucket_coordinator.lock(key)
-            initial = LeakyBucketUsage(now, capacity, capacity)
+            initial = LeakyBucketUsage(now, capacity, 0)
             reservation = None
 
             async with lock:
@@ -643,7 +643,7 @@ def LeakyBucketCooldown(
             raise FinishedException()
 
         if entity_id not in bucket:
-            bucket[entity_id] = LeakyBucketUsage(now, capacity, capacity)
+            bucket[entity_id] = LeakyBucketUsage(now, capacity, 0)
         usage = bucket[entity_id]
 
         _leak(usage, now)
@@ -704,7 +704,7 @@ def TokenBucketCooldown(
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):
-            设置令牌桶的最大容量，且不能为负数。
+            设置令牌桶的最大容量，且不能为负数。新实体从满桶开始。
 
         add_speed (int):
             设置令牌桶每秒添加 token 的数量，且不能为负数。
@@ -784,7 +784,7 @@ def TokenBucketCooldown(
         if name is not None:
             key = _named_bucket_key("token", name, entity_id)
             lock = named_bucket_coordinator.lock(key)
-            initial = TokenBucketUsage(now, capacity, 0)
+            initial = TokenBucketUsage(now, capacity, capacity)
             reservation = None
 
             async with lock:
@@ -831,7 +831,7 @@ def TokenBucketCooldown(
             raise FinishedException()
 
         if entity_id not in bucket:
-            bucket[entity_id] = TokenBucketUsage(now, capacity, 0)
+            bucket[entity_id] = TokenBucketUsage(now, capacity, capacity)
         usage = bucket[entity_id]
 
         _refill(usage, now)

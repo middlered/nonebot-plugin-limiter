@@ -77,6 +77,9 @@ from nonebot_plugin_limiter import (
 nb orm upgrade
 ```
 
+漏桶和令牌桶的新实体允许立即使用初始突发额度：漏桶从空桶开始，令牌桶从满桶开始。升级不会重置命名
+bucket 在数据库中已有的余额；新初始状态只用于之后首次出现的实体键。
+
 数据库未升级或不可用时，ORM 默认会阻止 Bot 启动；运行期间命名 bucket 的数据库事务失败会终止当前
 Matcher，不会降级为内存计数或无限放行。数据库连接和路径配置请参考
 [`nonebot-plugin-orm`](https://github.com/nonebot/plugin-orm)。
