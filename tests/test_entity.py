@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -67,38 +65,17 @@ def test_reference_key_fixed_vectors() -> None:
     )
 
 
-def test_legacy_persisted_entity_key_is_not_remapped(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from nonebot_plugin_limiter import persist
-    from nonebot_plugin_limiter.cooldown import _FixWindowCooldownDict
+def test_entity_identity_preserves_schema_boundary() -> None:
     from nonebot_plugin_limiter.entity_key import encode_user_ref
+    from nonebot_plugin_limiter.identity import identify_entity
 
-    bucket_name = "legacy-entity-key-test"
     legacy_key = "u`user-1`"
     new_key = encode_user_ref(make_session().user_ref)
-    data_file = tmp_path / "limiter_data.json"
-    data_file.write_text(
-        json.dumps(
-            {
-                "fix_window": {
-                    bucket_name: {
-                        legacy_key: {"start_time": 0, "available": 1},
-                    }
-                }
-            }
-        )
-    )
-    monkeypatch.setattr(persist, "plugin_data_file", data_file)
 
-    try:
-        persist.load_usage_data()
-        bucket = _FixWindowCooldownDict[bucket_name]
-        assert legacy_key in bucket
-        assert new_key not in bucket
-    finally:
-        _FixWindowCooldownDict.pop(bucket_name, None)
+    assert identify_entity(legacy_key).schema == "custom-v1"
+    assert identify_entity(legacy_key).key == legacy_key
+    assert identify_entity(new_key).schema == "uninfo-reference-v1"
+    assert identify_entity(new_key).key == new_key
 
 
 @pytest.mark.parametrize("scope_name", ["UserScope", "SceneScope", "UserSceneScope", "PublicScope"])

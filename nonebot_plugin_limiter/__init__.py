@@ -3,8 +3,7 @@ from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 
 require("nonebot_plugin_uninfo")
 require("nonebot_plugin_alconna")
-require("nonebot_plugin_localstore")
-require("nonebot_plugin_apscheduler")
+require("nonebot_plugin_orm")
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -31,5 +30,4 @@ from .entity import SceneScope as SceneScope
 from .entity import UserSceneScope as UserSceneScope
 from .entity import UserScope as UserScope
 from .handler import Increaser as Increaser
-from .persist import load_usage_data as load_usage_data
-from .persist import save_usage_data as save_usage_data
+from .storage import LimiterStorageError as LimiterStorageError

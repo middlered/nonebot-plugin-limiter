@@ -66,15 +66,20 @@ from nonebot_plugin_limiter import (
 ```
 
 > [!IMPORTANT]
-> 从旧版升级后，命名 bucket 中形如 `u\`...\``、`s\`...\`` 的旧 JSON 实体键不会迁移到新键，
-> 因为旧数据没有 scope。升级后的实体会从新键重新计数。
+> 本版本不再读取或迁移旧 `limiter_data.json`，所有命名 bucket 会从空数据库重新计数；旧文件不会被
+> 自动删除。旧持久化配置和 `load_usage_data()`、`save_usage_data()` 接口也已移除。
 
-配置项
+命名 bucket 使用 `nonebot-plugin-orm` 的数据库；未命名 bucket 仍只存在于创建 limiter 的闭包内存中。
+默认无需为本插件单独配置数据库，会与宿主的其他 ORM 插件共享默认 SQLite。首次使用或升级后请在 Bot
+项目中执行：
+
 ```bash
-COOLDOWN_ENABLE_PERSISTENCE = false # 开启持久化
-COOLDOWN_SAVE_INTERVAL = 60 # 开启持久化后保存时间，单位为秒
+nb orm upgrade
 ```
-修改持久化本地存储目录请参考 localstore [插件配置方法](https://github.com/nonebot/plugin-localstore?tab=readme-ov-file#%E9%85%8D%E7%BD%AE%E9%A1%B9) 更改 `LOCALSTORE_PLUGIN_DATA_DIR`
+
+数据库未升级或不可用时，ORM 默认会阻止 Bot 启动；运行期间命名 bucket 的数据库事务失败会终止当前
+Matcher，不会降级为内存计数或无限放行。数据库连接和路径配置请参考
+[`nonebot-plugin-orm`](https://github.com/nonebot/plugin-orm)。
 
 ## 快速上手
 
@@ -98,7 +103,7 @@ matcher = on()
         5,    # period, 冷却时长，单位为秒
         limit = 2,  # 最大触发次数
         reject = "操作过于频繁，请稍后再试。", # 可选，超额使用时的提示词
-        name = "my_limiter" # 可选，使用统计集合名称，填写名称将开启该集合的持久化
+        name = "my_limiter" # 可选；填写后使用数据库共享并持久化该集合
     )
 ])
 async def handler(): ...
@@ -156,17 +161,19 @@ async def _(): ...
 ```
 
 手动确认限制器使用记录，适用于没有成功完成事件处理时避免给用户添加限制。启用后，限制器会在放行时
-预占额度；业务成功时调用一次 `Increaser.execute()`，会确认当前 Matcher 中的全部预占，并在提交发生时
-正式计数。未确认的预占会在 Matcher 结束时自动释放，成功提交后重复调用 `execute()` 不会重复计数。
+预占额度；业务成功时调用一次 `await Increaser.execute()`，会确认当前 Matcher 中的全部预占，并等待
+数据库提交完成。未确认的预占会在 Matcher 结束时自动释放，成功提交后重复调用 `execute()` 不会重复计数。
 命中 `BYPASS_ENTITY` 或当前没有待确认预占时仍可注入 `Increaser`，此时 `execute()` 不会产生计数；只有
 当前 Matcher 没有运行任何启用 `set_increaser` 的限制器时，注入才会抛出 `KeyError`。
 
-同步 `def` Handler 也可以直接调用 `execute()`，内部会把提交送回 NoneBot 事件循环完成后再返回。预占会
-一直占用额度直到确认或 Matcher 结束，因此长时间业务处理会相应减少其他请求的可用额度。预占不会跨
-`matcher.pause()` 保留；需要等待后续事件时，应把启用 `set_increaser` 的限制器和 `execute()` 放在恢复后
-最终执行业务的同一个 Handler 中。Matcher 已经释放预占后，迟到的 `execute()` 会抛出 `RuntimeError`。
+`execute()` 是异步接口，因此确认计数的业务必须使用 `async def` Handler 并显式 `await`。预占会一直占用
+额度直到确认或 Matcher 结束，因此长时间业务处理会相应减少其他请求的可用额度。预占不会跨
+`matcher.pause()` 保留；需要等待后续事件时，应把启用 `set_increaser` 的限制器和 `await execute()` 放在
+恢复后最终执行业务的同一个 Handler 中。Matcher 已经释放预占后，迟到的 `execute()` 会抛出
+`RuntimeError`。
 
-预占和并发上限只在单个 NoneBot 进程内协调；多 worker 部署会各自拥有额度。
+命名 bucket 的已提交用量由数据库共享，但未提交的预占和并发上限只在单个 NoneBot 进程内协调；当前不保证
+多 worker 下的成功后计数不会超发。
 ```python
 from nonebot_plugin_limiter import Increaser
 
@@ -178,7 +185,7 @@ async def _(increaser: Increaser):
     if <not_meet_condition>:
         await cmd.finish("Run failed")
     else:
-        increaser.execute() # 这会给该实体添加一条使用记录
+        await increaser.execute() # 等待该实体的使用记录提交到数据库
         await cmd.finish("Run successed")
 ```
 
@@ -209,7 +216,7 @@ dailysign = on_startswith("签到")
         "0 0 * * *", # Cooldown 支持传入 cron 格式定时任务
         limit = 1,
         reject = "你今天已经签到过了！",
-        name = "dailysign" # 为使用统计集合命名，实现持久化
+        name = "dailysign" # 为使用统计集合命名，使用数据库持久化
     ),
 ])
 async def _():
@@ -223,7 +230,7 @@ async def _():
 - [x] 令牌桶
 - [x] reject 依赖注入回调函数（试验性支持）
 - [ ] 重置用量
-- [x] 本地持久化状态
+- [x] 命名 bucket 数据库持久化
 
 ## 鸣谢
 本插件部分代码参考了 [nonebot/adapter-onebot](https://github.com/nonebot/adapter-onebot) 的 `Cooldown` [实现](https://github.com/nonebot/adapter-onebot/blob/51294404cc8bf0b3d03008e09f34d3dd1a6acfd8/nonebot/adapters/onebot/v11/helpers.py#L224) ，在此表示感谢

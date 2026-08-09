@@ -2,7 +2,7 @@ import json
 
 from nonebot_plugin_uninfo import SceneRef, UserRef
 
-_ENTITY_KEY_SCHEMA = "uninfo-reference-v1"
+ENTITY_KEY_SCHEMA = "uninfo-reference-v1"
 
 
 def encode_user_ref(ref: UserRef) -> str:
@@ -41,4 +41,4 @@ def encode_user_scene_ref(user_ref: UserRef, scene_ref: SceneRef) -> str:
 
 def _encode(kind: str, *components: str | int | None) -> str:
     payload = json.dumps(components, ensure_ascii=False, separators=(",", ":"))
-    return f"{_ENTITY_KEY_SCHEMA}:{kind}:{payload}"
+    return f"{ENTITY_KEY_SCHEMA}:{kind}:{payload}"

@@ -1,10 +1,15 @@
 import os
+from pathlib import Path
+import tempfile
+
+os.environ["ENVIRONMENT"] = "test"
+_TEST_DATABASE = Path(tempfile.mkdtemp(prefix="nonebot-plugin-limiter-tests-")) / "db.sqlite3"
+os.environ["SQLALCHEMY_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DATABASE.as_posix()}"
+os.environ["ALEMBIC_STARTUP_CHECK"] = "false"
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 import pytest
-
-os.environ["ENVIRONMENT"] = "test"
 
 
 @pytest.fixture(scope="session", autouse=True)
