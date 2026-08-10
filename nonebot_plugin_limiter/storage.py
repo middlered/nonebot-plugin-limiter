@@ -25,6 +25,12 @@ class LimiterStorageError(RuntimeError):
 
 
 class LimiterStorage(Protocol):
+    async def read_fix_window(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> FixWindowUsage | None: ...
+
     async def mutate_fix_window(
         self,
         bucket_name: str,
@@ -32,6 +38,12 @@ class LimiterStorage(Protocol):
         initial: FixWindowUsage,
         mutate: Callable[[FixWindowUsage], _T],
     ) -> _T: ...
+
+    async def read_sliding_window(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> SlidingWindowUsage | None: ...
 
     async def mutate_sliding_window(
         self,
@@ -41,6 +53,12 @@ class LimiterStorage(Protocol):
         mutate: Callable[[SlidingWindowUsage], _T],
     ) -> _T: ...
 
+    async def read_leaky_bucket(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> LeakyBucketUsage | None: ...
+
     async def mutate_leaky_bucket(
         self,
         bucket_name: str,
@@ -48,6 +66,12 @@ class LimiterStorage(Protocol):
         initial: LeakyBucketUsage,
         mutate: Callable[[LeakyBucketUsage], _T],
     ) -> _T: ...
+
+    async def read_token_bucket(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> TokenBucketUsage | None: ...
 
     async def mutate_token_bucket(
         self,
@@ -75,6 +99,22 @@ def _identity_filter(model: type, bucket_name: str, identity: EntityIdentity):
 
 
 class OrmLimiterStorage:
+    async def read_fix_window(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> FixWindowUsage | None:
+        try:
+            async with get_session() as session:
+                row = await session.scalar(
+                    select(FixWindowState).where(*_identity_filter(FixWindowState, bucket_name, identity))
+                )
+                if row is None:
+                    return None
+                return FixWindowUsage(_from_microseconds(row.start_time_us), row.available)
+        except (SQLAlchemyError, OSError) as exception:
+            raise LimiterStorageError(f"Failed to read named fixed-window bucket {bucket_name!r}.") from exception
+
     async def mutate_fix_window(
         self,
         bucket_name: str,
@@ -107,6 +147,32 @@ class OrmLimiterStorage:
                 return result
         except (SQLAlchemyError, OSError) as exception:
             raise LimiterStorageError(f"Failed to update named fixed-window bucket {bucket_name!r}.") from exception
+
+    async def read_sliding_window(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> SlidingWindowUsage | None:
+        try:
+            async with get_session() as session:
+                row = await session.scalar(
+                    select(SlidingWindowState).where(*_identity_filter(SlidingWindowState, bucket_name, identity))
+                )
+                if row is None:
+                    return None
+                timestamps = deque(
+                    _from_microseconds(value)
+                    for value in (
+                        await session.scalars(
+                            select(SlidingWindowEntry.timestamp_us)
+                            .where(SlidingWindowEntry.state_id == row.id)
+                            .order_by(SlidingWindowEntry.position)
+                        )
+                    ).all()
+                )
+                return SlidingWindowUsage(timestamps)
+        except (SQLAlchemyError, OSError) as exception:
+            raise LimiterStorageError(f"Failed to read named sliding-window bucket {bucket_name!r}.") from exception
 
     async def mutate_sliding_window(
         self,
@@ -159,6 +225,26 @@ class OrmLimiterStorage:
         except (SQLAlchemyError, OSError) as exception:
             raise LimiterStorageError(f"Failed to update named sliding-window bucket {bucket_name!r}.") from exception
 
+    async def read_leaky_bucket(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> LeakyBucketUsage | None:
+        try:
+            async with get_session() as session:
+                row = await session.scalar(
+                    select(LeakyBucketState).where(*_identity_filter(LeakyBucketState, bucket_name, identity))
+                )
+                if row is None:
+                    return None
+                return LeakyBucketUsage(
+                    _from_microseconds(row.last_update_time_us),
+                    row.capacity,
+                    row.used,
+                )
+        except (SQLAlchemyError, OSError) as exception:
+            raise LimiterStorageError(f"Failed to read named leaky bucket {bucket_name!r}.") from exception
+
     async def mutate_leaky_bucket(
         self,
         bucket_name: str,
@@ -197,6 +283,26 @@ class OrmLimiterStorage:
                 return result
         except (SQLAlchemyError, OSError) as exception:
             raise LimiterStorageError(f"Failed to update named leaky bucket {bucket_name!r}.") from exception
+
+    async def read_token_bucket(
+        self,
+        bucket_name: str,
+        identity: EntityIdentity,
+    ) -> TokenBucketUsage | None:
+        try:
+            async with get_session() as session:
+                row = await session.scalar(
+                    select(TokenBucketState).where(*_identity_filter(TokenBucketState, bucket_name, identity))
+                )
+                if row is None:
+                    return None
+                return TokenBucketUsage(
+                    _from_microseconds(row.last_update_time_us),
+                    row.capacity,
+                    row.available,
+                )
+        except (SQLAlchemyError, OSError) as exception:
+            raise LimiterStorageError(f"Failed to read named token bucket {bucket_name!r}.") from exception
 
     async def mutate_token_bucket(
         self,

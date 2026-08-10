@@ -20,6 +20,16 @@ from tzlocal import get_localzone
 from ._state import FixWindowUsage, LeakyBucketUsage, SlidingWindowUsage, TokenBucketUsage
 from .coordinator import NamedBucketKey, named_bucket_coordinator
 from .entity import BYPASS_ENTITY, CooldownEntity
+from .handle import (
+    FixedWindowHandle,
+    FixedWindowSnapshot,
+    LeakyBucketHandle,
+    LeakyBucketSnapshot,
+    SlidingWindowHandle,
+    SlidingWindowSnapshot,
+    TokenBucketHandle,
+    TokenBucketSnapshot,
+)
 from .handler import _ensure_increaser, _reserve_increaser
 from .identity import identify_entity
 from .storage import get_limiter_storage
@@ -80,6 +90,81 @@ def _entity_id_dep_wrapper(entity: CooldownEntity | _DependentCallable[str]) -> 
 
 def _named_bucket_key(algorithm: str, bucket_name: str, entity_id: str) -> NamedBucketKey:
     return NamedBucketKey(algorithm, bucket_name, identify_entity(entity_id))
+
+
+def _fixed_window_trigger(period: int | timedelta | str) -> BaseTrigger:
+    if isinstance(period, str):
+        return cast(BaseTrigger, CronTrigger.from_crontab(period))
+
+    interval_length = period.total_seconds() if isinstance(period, timedelta) else period
+    _validate_positive("period", interval_length)
+    return cast(BaseTrigger, IntervalTrigger(seconds=interval_length))
+
+
+def _advance_fixed_window(
+    usage: FixWindowUsage,
+    current_time: datetime,
+    trigger: BaseTrigger,
+    limit: int,
+) -> None:
+    reset_time = trigger.get_next_fire_time(usage.start_time, current_time)
+    assert reset_time is not None, "reset_time should not be None"
+    if current_time >= reset_time:
+        usage.start_time = current_time
+        usage.available = limit
+
+
+def _fixed_window_snapshot(usage: FixWindowUsage, pending: int) -> FixedWindowSnapshot:
+    return FixedWindowSnapshot(max(usage.available - pending, 0), pending)
+
+
+def _drop_expired_sliding_window(
+    usage: SlidingWindowUsage,
+    current_time: datetime,
+    window_length: float,
+) -> None:
+    while usage.timestamps and (current_time - usage.timestamps[0]).total_seconds() >= window_length:
+        usage.timestamps.popleft()
+
+
+def _sliding_window_snapshot(
+    usage: SlidingWindowUsage,
+    limit: int,
+    pending: int,
+) -> SlidingWindowSnapshot:
+    return SlidingWindowSnapshot(max(limit - len(usage.timestamps) - pending, 0), pending)
+
+
+def _leak_bucket(usage: LeakyBucketUsage, current_time: datetime, leak_speed: int) -> None:
+    leaked_size, usage.last_update_time = _calculate_continuous_recovery(
+        usage.last_update_time,
+        current_time,
+        leak_speed,
+        usage.used,
+    )
+    usage.used = max(usage.used - leaked_size, 0)
+
+
+def _leaky_bucket_snapshot(usage: LeakyBucketUsage, pending: int) -> LeakyBucketSnapshot:
+    return LeakyBucketSnapshot(
+        used=usage.used,
+        available_capacity=max(usage.capacity - usage.used - pending, 0),
+        pending=pending,
+    )
+
+
+def _refill_token_bucket(usage: TokenBucketUsage, current_time: datetime, add_speed: int) -> None:
+    resume_size, usage.last_update_time = _calculate_continuous_recovery(
+        usage.last_update_time,
+        current_time,
+        add_speed,
+        usage.capacity - usage.available,
+    )
+    usage.available = min(usage.available + resume_size, usage.capacity)
+
+
+def _token_bucket_snapshot(usage: TokenBucketUsage, pending: int) -> TokenBucketSnapshot:
+    return TokenBucketSnapshot(max(usage.available - pending, 0), pending)
 
 
 def _limit_dep_wrapper(limit: int | _DependentCallable[int]) -> _DependentCallable[int]:
@@ -159,12 +244,16 @@ def Cooldown(
 
         set_increaser (bool):
             可选，是否获取限制器的增加器。默认为 False。
-            - 启用后会先预占额度；业务成功时需通过依赖获取 Increaser 并 await execute() 确认计数。
+            - 启用后会先预占额度；业务成功时可执行当前 Handle 或批量 Increaser 确认计数。
             - 未确认的预占会在 Matcher 结束时自动释放。
 
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Returns:
+        可作为 parameterless 依赖使用的 NoneBot `Depends`；声明为具名 Handler 参数时注入
+        `FixedWindowHandle`，用于只读状态或逐项确认预占。
 
     Raises:
         ValueError: 当非 cron 周期不大于零，或静态、动态 `limit` 为负数时抛出。
@@ -190,16 +279,7 @@ def Cooldown(
     if isinstance(limit, int):
         _validate_non_negative("limit", limit)
 
-    if isinstance(period, str):
-        trigger = CronTrigger.from_crontab(period)
-    else:
-        if isinstance(period, timedelta):
-            interval_length = period.total_seconds()
-        else:
-            interval_length = period
-        _validate_positive("period", interval_length)
-        trigger = IntervalTrigger(seconds=interval_length)
-    trigger = cast(BaseTrigger, trigger)
+    trigger = _fixed_window_trigger(period)
 
     bucket: dict[str, FixWindowUsage] = {}
 
@@ -208,22 +288,20 @@ def Cooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> AsyncGenerator[None, None]:
+    ) -> AsyncGenerator[FixedWindowHandle, None]:
         if set_increaser:
             _ensure_increaser(state)
         if entity_id == BYPASS_ENTITY:
-            yield
+            snapshot = FixedWindowSnapshot(None)
+
+            async def _read_bypass() -> FixedWindowSnapshot:
+                return snapshot
+
+            yield FixedWindowHandle(_read_bypass, committed=snapshot)
             return
         _validate_non_negative("limit", limit)
 
         now = datetime.now(tz=_tz)
-
-        def _advance_window(usage: FixWindowUsage, current_time: datetime) -> None:
-            reset_time = trigger.get_next_fire_time(usage.start_time, current_time)
-            assert reset_time is not None, "reset_time should not be None"
-            if current_time >= reset_time:
-                usage.start_time = current_time
-                usage.available = limit
 
         if name is not None:
             key = _named_bucket_key("fixed", name, entity_id)
@@ -231,31 +309,47 @@ def Cooldown(
             initial = FixWindowUsage(now, limit)
             reservation = None
 
+            async def _read_named() -> FixedWindowSnapshot:
+                read_time = datetime.now(tz=_tz)
+                async with lock:
+                    read_usage = await get_limiter_storage().read_fix_window(name, key.identity)
+                    if read_usage is None:
+                        read_usage = FixWindowUsage(read_time, limit)
+                    _advance_fixed_window(read_usage, read_time, trigger, limit)
+                    return _fixed_window_snapshot(read_usage, named_bucket_coordinator.pending(key))
+
             async with lock:
                 pending = named_bucket_coordinator.pending(key)
 
-                def _admit(usage: FixWindowUsage) -> bool:
-                    _advance_window(usage, now)
+                def _admit(usage: FixWindowUsage) -> tuple[bool, FixedWindowSnapshot]:
+                    _advance_fixed_window(usage, now, trigger, limit)
                     if usage.available - pending <= 0:
-                        return False
+                        return False, _fixed_window_snapshot(usage, pending)
                     if not set_increaser:
                         usage.available -= 1
-                    return True
+                    return True, _fixed_window_snapshot(usage, pending)
 
-                allowed = await get_limiter_storage().mutate_fix_window(name, key.identity, initial, _admit)
+                allowed, committed_snapshot = await get_limiter_storage().mutate_fix_window(
+                    name, key.identity, initial, _admit
+                )
                 if allowed and set_increaser:
                     named_bucket_coordinator.reserve(key, 1)
 
-                    async def _commit_action() -> None:
+                    async def _commit_action() -> FixedWindowSnapshot:
                         async with lock:
                             commit_time = datetime.now(tz=_tz)
+                            pending_after = named_bucket_coordinator.pending(key) - 1
 
-                            def _commit(usage: FixWindowUsage) -> None:
-                                _advance_window(usage, commit_time)
+                            def _commit(usage: FixWindowUsage) -> FixedWindowSnapshot:
+                                _advance_fixed_window(usage, commit_time, trigger, limit)
                                 usage.available -= 1
+                                return _fixed_window_snapshot(usage, pending_after)
 
-                            await get_limiter_storage().mutate_fix_window(name, key.identity, initial, _commit)
+                            snapshot = await get_limiter_storage().mutate_fix_window(
+                                name, key.identity, initial, _commit
+                            )
                             named_bucket_coordinator.release(key, 1)
+                            return snapshot
 
                     async def _release_action() -> None:
                         async with lock:
@@ -264,8 +358,13 @@ def Cooldown(
                     reservation = _reserve_increaser(state, _commit_action, _release_action)
 
             if allowed:
+                handle = FixedWindowHandle(
+                    _read_named,
+                    reservation,
+                    committed=committed_snapshot,
+                )
                 try:
-                    yield
+                    yield handle
                 finally:
                     if reservation is not None:
                         await reservation.release()
@@ -278,19 +377,27 @@ def Cooldown(
             bucket[entity_id] = FixWindowUsage(now, limit)
         usage = bucket[entity_id]
 
-        _advance_window(usage, now)
+        _advance_fixed_window(usage, now, trigger, limit)
+
+        async def _read_unnamed() -> FixedWindowSnapshot:
+            read_time = datetime.now(tz=_tz)
+            read_usage = FixWindowUsage(usage.start_time, usage.available)
+            _advance_fixed_window(read_usage, read_time, trigger, limit)
+            return _fixed_window_snapshot(read_usage, usage.pending)
 
         if usage.available - usage.pending > 0:
             if not set_increaser:
                 usage.available -= 1
-                yield
+                snapshot = _fixed_window_snapshot(usage, usage.pending)
+                yield FixedWindowHandle(_read_unnamed, committed=snapshot)
                 return
 
-            async def _commit_action() -> None:
+            async def _commit_action() -> FixedWindowSnapshot:
                 commit_time = datetime.now(tz=_tz)
-                _advance_window(usage, commit_time)
+                _advance_fixed_window(usage, commit_time, trigger, limit)
                 usage.pending -= 1
                 usage.available -= 1
+                return _fixed_window_snapshot(usage, usage.pending)
 
             async def _release_action() -> None:
                 usage.pending -= 1
@@ -298,7 +405,7 @@ def Cooldown(
             reservation = _reserve_increaser(state, _commit_action, _release_action)
             usage.pending += 1
             try:
-                yield
+                yield FixedWindowHandle(_read_unnamed, reservation)
             finally:
                 await reservation.release()
             return
@@ -349,12 +456,16 @@ def SlidingWindowCooldown(
 
         set_increaser (bool):
             可选，是否获取限制器的增加器。默认为 False。
-            - 启用后会先预占额度；业务成功时需通过依赖获取 Increaser 并 await execute() 确认计数。
+            - 启用后会先预占额度；业务成功时可执行当前 Handle 或批量 Increaser 确认计数。
             - 未确认的预占会在 Matcher 结束时自动释放。
 
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Returns:
+        可作为 parameterless 依赖使用的 NoneBot `Depends`；声明为具名 Handler 参数时注入
+        `SlidingWindowHandle`，用于只读状态或逐项确认预占。
 
     Raises:
         ValueError: 当周期不大于零，或静态、动态 `limit` 为负数时抛出。
@@ -393,19 +504,20 @@ def SlidingWindowCooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> AsyncGenerator[None, None]:
+    ) -> AsyncGenerator[SlidingWindowHandle, None]:
         if set_increaser:
             _ensure_increaser(state)
         if entity_id == BYPASS_ENTITY:
-            yield
+            snapshot = SlidingWindowSnapshot(None)
+
+            async def _read_bypass() -> SlidingWindowSnapshot:
+                return snapshot
+
+            yield SlidingWindowHandle(_read_bypass, committed=snapshot)
             return
         _validate_non_negative("limit", limit)
 
         now = datetime.now(tz=_tz)
-
-        def _drop_expired(usage: SlidingWindowUsage) -> None:
-            while usage.timestamps and (now - usage.timestamps[0]).total_seconds() >= window_length:
-                usage.timestamps.popleft()
 
         if name is not None:
             key = _named_bucket_key("sliding", name, entity_id)
@@ -413,30 +525,47 @@ def SlidingWindowCooldown(
             initial = SlidingWindowUsage()
             reservation = None
 
+            async def _read_named() -> SlidingWindowSnapshot:
+                read_time = datetime.now(tz=_tz)
+                async with lock:
+                    read_usage = await get_limiter_storage().read_sliding_window(name, key.identity)
+                    if read_usage is None:
+                        read_usage = SlidingWindowUsage()
+                    _drop_expired_sliding_window(read_usage, read_time, window_length)
+                    return _sliding_window_snapshot(read_usage, limit, named_bucket_coordinator.pending(key))
+
             async with lock:
                 pending = named_bucket_coordinator.pending(key)
 
-                def _admit(usage: SlidingWindowUsage) -> bool:
-                    _drop_expired(usage)
+                def _admit(usage: SlidingWindowUsage) -> tuple[bool, SlidingWindowSnapshot]:
+                    _drop_expired_sliding_window(usage, now, window_length)
                     if len(usage.timestamps) + pending >= limit:
-                        return False
+                        return False, _sliding_window_snapshot(usage, limit, pending)
                     if not set_increaser:
                         usage.timestamps.append(now)
-                    return True
+                    return True, _sliding_window_snapshot(usage, limit, pending)
 
-                allowed = await get_limiter_storage().mutate_sliding_window(name, key.identity, initial, _admit)
+                allowed, committed_snapshot = await get_limiter_storage().mutate_sliding_window(
+                    name, key.identity, initial, _admit
+                )
                 if allowed and set_increaser:
                     named_bucket_coordinator.reserve(key, 1)
 
-                    async def _commit_action() -> None:
+                    async def _commit_action() -> SlidingWindowSnapshot:
                         async with lock:
                             commit_time = datetime.now(tz=_tz)
+                            pending_after = named_bucket_coordinator.pending(key) - 1
 
-                            def _commit(usage: SlidingWindowUsage) -> None:
+                            def _commit(usage: SlidingWindowUsage) -> SlidingWindowSnapshot:
+                                _drop_expired_sliding_window(usage, commit_time, window_length)
                                 usage.timestamps.append(commit_time)
+                                return _sliding_window_snapshot(usage, limit, pending_after)
 
-                            await get_limiter_storage().mutate_sliding_window(name, key.identity, initial, _commit)
+                            snapshot = await get_limiter_storage().mutate_sliding_window(
+                                name, key.identity, initial, _commit
+                            )
                             named_bucket_coordinator.release(key, 1)
+                            return snapshot
 
                     async def _release_action() -> None:
                         async with lock:
@@ -445,8 +574,13 @@ def SlidingWindowCooldown(
                     reservation = _reserve_increaser(state, _commit_action, _release_action)
 
             if allowed:
+                handle = SlidingWindowHandle(
+                    _read_named,
+                    reservation,
+                    committed=committed_snapshot,
+                )
                 try:
-                    yield
+                    yield handle
                 finally:
                     if reservation is not None:
                         await reservation.release()
@@ -459,18 +593,27 @@ def SlidingWindowCooldown(
             bucket[entity_id] = SlidingWindowUsage()
         usage = bucket[entity_id]
 
-        # Drop old timestamps
-        _drop_expired(usage)
+        _drop_expired_sliding_window(usage, now, window_length)
+
+        async def _read_unnamed() -> SlidingWindowSnapshot:
+            read_time = datetime.now(tz=_tz)
+            read_usage = SlidingWindowUsage(usage.timestamps.copy())
+            _drop_expired_sliding_window(read_usage, read_time, window_length)
+            return _sliding_window_snapshot(read_usage, limit, usage.pending)
 
         if len(usage.timestamps) + usage.pending < limit:
             if not set_increaser:
                 usage.timestamps.append(now)
-                yield
+                snapshot = _sliding_window_snapshot(usage, limit, usage.pending)
+                yield SlidingWindowHandle(_read_unnamed, committed=snapshot)
                 return
 
-            async def _commit_action() -> None:
+            async def _commit_action() -> SlidingWindowSnapshot:
+                commit_time = datetime.now(tz=_tz)
+                _drop_expired_sliding_window(usage, commit_time, window_length)
                 usage.pending -= 1
-                usage.timestamps.append(datetime.now(tz=_tz))
+                usage.timestamps.append(commit_time)
+                return _sliding_window_snapshot(usage, limit, usage.pending)
 
             async def _release_action() -> None:
                 usage.pending -= 1
@@ -478,7 +621,7 @@ def SlidingWindowCooldown(
             reservation = _reserve_increaser(state, _commit_action, _release_action)
             usage.pending += 1
             try:
-                yield
+                yield SlidingWindowHandle(_read_unnamed, reservation)
             finally:
                 await reservation.release()
             return  # Didn't exceed
@@ -533,12 +676,16 @@ def LeakyBucketCooldown(
 
         set_increaser (bool):
             可选，是否获取限制器的增加器。默认为 False。
-            - 启用后会先预占额度；业务成功时需通过依赖获取 Increaser 并 await execute() 确认计数。
+            - 启用后会先预占额度；业务成功时可执行当前 Handle 或批量 Increaser 确认计数。
             - 未确认的预占会在 Matcher 结束时自动释放。
 
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Returns:
+        可作为 parameterless 依赖使用的 NoneBot `Depends`；声明为具名 Handler 参数时注入
+        `LeakyBucketHandle`，用于只读状态或逐项确认预占。
 
     Raises:
         ValueError: 当容量、恢复速度或静态、动态单次注入量为负数时抛出。
@@ -574,24 +721,20 @@ def LeakyBucketCooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         pour_size: int = Depends(_limit_dep_wrapper(pour_size)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> AsyncGenerator[None, None]:
+    ) -> AsyncGenerator[LeakyBucketHandle, None]:
         if set_increaser:
             _ensure_increaser(state)
         if entity_id == BYPASS_ENTITY:
-            yield
+            snapshot = LeakyBucketSnapshot(None, None)
+
+            async def _read_bypass() -> LeakyBucketSnapshot:
+                return snapshot
+
+            yield LeakyBucketHandle(_read_bypass, committed=snapshot)
             return
         _validate_non_negative("pour_size", pour_size)
 
         now = datetime.now(tz=_tz)
-
-        def _leak(usage: LeakyBucketUsage, current_time: datetime) -> None:
-            leaked_size, usage.last_update_time = _calculate_continuous_recovery(
-                usage.last_update_time,
-                current_time,
-                leak_speed,
-                usage.used,
-            )
-            usage.used = max(usage.used - leaked_size, 0)
 
         if name is not None:
             key = _named_bucket_key("leaky", name, entity_id)
@@ -599,31 +742,47 @@ def LeakyBucketCooldown(
             initial = LeakyBucketUsage(now, capacity, 0)
             reservation = None
 
+            async def _read_named() -> LeakyBucketSnapshot:
+                read_time = datetime.now(tz=_tz)
+                async with lock:
+                    read_usage = await get_limiter_storage().read_leaky_bucket(name, key.identity)
+                    if read_usage is None:
+                        read_usage = LeakyBucketUsage(read_time, capacity, 0)
+                    _leak_bucket(read_usage, read_time, leak_speed)
+                    return _leaky_bucket_snapshot(read_usage, named_bucket_coordinator.pending(key))
+
             async with lock:
                 pending = named_bucket_coordinator.pending(key)
 
-                def _admit(usage: LeakyBucketUsage) -> bool:
-                    _leak(usage, now)
+                def _admit(usage: LeakyBucketUsage) -> tuple[bool, LeakyBucketSnapshot]:
+                    _leak_bucket(usage, now, leak_speed)
                     if usage.used + pending + pour_size > usage.capacity:
-                        return False
+                        return False, _leaky_bucket_snapshot(usage, pending)
                     if not set_increaser:
                         usage.used += pour_size
-                    return True
+                    return True, _leaky_bucket_snapshot(usage, pending)
 
-                allowed = await get_limiter_storage().mutate_leaky_bucket(name, key.identity, initial, _admit)
+                allowed, committed_snapshot = await get_limiter_storage().mutate_leaky_bucket(
+                    name, key.identity, initial, _admit
+                )
                 if allowed and set_increaser:
                     named_bucket_coordinator.reserve(key, pour_size)
 
-                    async def _commit_action() -> None:
+                    async def _commit_action() -> LeakyBucketSnapshot:
                         async with lock:
                             commit_time = datetime.now(tz=_tz)
+                            pending_after = named_bucket_coordinator.pending(key) - pour_size
 
-                            def _commit(usage: LeakyBucketUsage) -> None:
-                                _leak(usage, commit_time)
+                            def _commit(usage: LeakyBucketUsage) -> LeakyBucketSnapshot:
+                                _leak_bucket(usage, commit_time, leak_speed)
                                 usage.used += pour_size
+                                return _leaky_bucket_snapshot(usage, pending_after)
 
-                            await get_limiter_storage().mutate_leaky_bucket(name, key.identity, initial, _commit)
+                            snapshot = await get_limiter_storage().mutate_leaky_bucket(
+                                name, key.identity, initial, _commit
+                            )
                             named_bucket_coordinator.release(key, pour_size)
+                            return snapshot
 
                     async def _release_action() -> None:
                         async with lock:
@@ -632,8 +791,13 @@ def LeakyBucketCooldown(
                     reservation = _reserve_increaser(state, _commit_action, _release_action)
 
             if allowed:
+                handle = LeakyBucketHandle(
+                    _read_named,
+                    reservation,
+                    committed=committed_snapshot,
+                )
                 try:
-                    yield
+                    yield handle
                 finally:
                     if reservation is not None:
                         await reservation.release()
@@ -646,19 +810,27 @@ def LeakyBucketCooldown(
             bucket[entity_id] = LeakyBucketUsage(now, capacity, 0)
         usage = bucket[entity_id]
 
-        _leak(usage, now)
+        _leak_bucket(usage, now, leak_speed)
+
+        async def _read_unnamed() -> LeakyBucketSnapshot:
+            read_time = datetime.now(tz=_tz)
+            read_usage = LeakyBucketUsage(usage.last_update_time, usage.capacity, usage.used)
+            _leak_bucket(read_usage, read_time, leak_speed)
+            return _leaky_bucket_snapshot(read_usage, usage.pending)
 
         if usage.used + usage.pending + pour_size <= usage.capacity:
             if not set_increaser:
                 usage.used += pour_size
-                yield
+                snapshot = _leaky_bucket_snapshot(usage, usage.pending)
+                yield LeakyBucketHandle(_read_unnamed, committed=snapshot)
                 return
 
-            async def _commit_action() -> None:
+            async def _commit_action() -> LeakyBucketSnapshot:
                 commit_time = datetime.now(tz=_tz)
-                _leak(usage, commit_time)
+                _leak_bucket(usage, commit_time, leak_speed)
                 usage.pending -= pour_size
                 usage.used += pour_size
+                return _leaky_bucket_snapshot(usage, usage.pending)
 
             async def _release_action() -> None:
                 usage.pending -= pour_size
@@ -666,7 +838,7 @@ def LeakyBucketCooldown(
             reservation = _reserve_increaser(state, _commit_action, _release_action)
             usage.pending += pour_size
             try:
-                yield
+                yield LeakyBucketHandle(_read_unnamed, reservation)
             finally:
                 await reservation.release()
             return  # Didn't exceed
@@ -721,12 +893,16 @@ def TokenBucketCooldown(
 
         set_increaser (bool):
             可选，是否获取限制器的增加器。默认为 False。
-            - 启用后会先预占额度；业务成功时需通过依赖获取 Increaser 并 await execute() 确认计数。
+            - 启用后会先预占额度；业务成功时可执行当前 Handle 或批量 Increaser 确认计数。
             - 未确认的预占会在 Matcher 结束时自动释放。
 
         name (None | str):
             可选，设置当前限制器的使用统计集合。默认为 `None` ，即私有集合。
             - 当传入 `str` ，将创建或加入一个同名公共集合，可用于与其他命令的限制器共享使用统计。
+
+    Returns:
+        可作为 parameterless 依赖使用的 NoneBot `Depends`；声明为具名 Handler 参数时注入
+        `TokenBucketHandle`，用于只读状态或逐项确认预占。
 
     Raises:
         ValueError: 当容量、恢复速度或静态、动态单次消费量为负数时抛出。
@@ -762,24 +938,20 @@ def TokenBucketCooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         consume_size: int = Depends(_limit_dep_wrapper(consume_size)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> AsyncGenerator[None, None]:
+    ) -> AsyncGenerator[TokenBucketHandle, None]:
         if set_increaser:
             _ensure_increaser(state)
         if entity_id == BYPASS_ENTITY:
-            yield
+            snapshot = TokenBucketSnapshot(None)
+
+            async def _read_bypass() -> TokenBucketSnapshot:
+                return snapshot
+
+            yield TokenBucketHandle(_read_bypass, committed=snapshot)
             return
         _validate_non_negative("consume_size", consume_size)
 
         now = datetime.now(tz=_tz)
-
-        def _refill(usage: TokenBucketUsage, current_time: datetime) -> None:
-            resume_size, usage.last_update_time = _calculate_continuous_recovery(
-                usage.last_update_time,
-                current_time,
-                add_speed,
-                usage.capacity - usage.available,
-            )
-            usage.available = min(usage.available + resume_size, usage.capacity)
 
         if name is not None:
             key = _named_bucket_key("token", name, entity_id)
@@ -787,31 +959,47 @@ def TokenBucketCooldown(
             initial = TokenBucketUsage(now, capacity, capacity)
             reservation = None
 
+            async def _read_named() -> TokenBucketSnapshot:
+                read_time = datetime.now(tz=_tz)
+                async with lock:
+                    read_usage = await get_limiter_storage().read_token_bucket(name, key.identity)
+                    if read_usage is None:
+                        read_usage = TokenBucketUsage(read_time, capacity, capacity)
+                    _refill_token_bucket(read_usage, read_time, add_speed)
+                    return _token_bucket_snapshot(read_usage, named_bucket_coordinator.pending(key))
+
             async with lock:
                 pending = named_bucket_coordinator.pending(key)
 
-                def _admit(usage: TokenBucketUsage) -> bool:
-                    _refill(usage, now)
+                def _admit(usage: TokenBucketUsage) -> tuple[bool, TokenBucketSnapshot]:
+                    _refill_token_bucket(usage, now, add_speed)
                     if usage.available - pending < consume_size:
-                        return False
+                        return False, _token_bucket_snapshot(usage, pending)
                     if not set_increaser:
                         usage.available -= consume_size
-                    return True
+                    return True, _token_bucket_snapshot(usage, pending)
 
-                allowed = await get_limiter_storage().mutate_token_bucket(name, key.identity, initial, _admit)
+                allowed, committed_snapshot = await get_limiter_storage().mutate_token_bucket(
+                    name, key.identity, initial, _admit
+                )
                 if allowed and set_increaser:
                     named_bucket_coordinator.reserve(key, consume_size)
 
-                    async def _commit_action() -> None:
+                    async def _commit_action() -> TokenBucketSnapshot:
                         async with lock:
                             commit_time = datetime.now(tz=_tz)
+                            pending_after = named_bucket_coordinator.pending(key) - consume_size
 
-                            def _commit(usage: TokenBucketUsage) -> None:
-                                _refill(usage, commit_time)
+                            def _commit(usage: TokenBucketUsage) -> TokenBucketSnapshot:
+                                _refill_token_bucket(usage, commit_time, add_speed)
                                 usage.available -= consume_size
+                                return _token_bucket_snapshot(usage, pending_after)
 
-                            await get_limiter_storage().mutate_token_bucket(name, key.identity, initial, _commit)
+                            snapshot = await get_limiter_storage().mutate_token_bucket(
+                                name, key.identity, initial, _commit
+                            )
                             named_bucket_coordinator.release(key, consume_size)
+                            return snapshot
 
                     async def _release_action() -> None:
                         async with lock:
@@ -820,8 +1008,13 @@ def TokenBucketCooldown(
                     reservation = _reserve_increaser(state, _commit_action, _release_action)
 
             if allowed:
+                handle = TokenBucketHandle(
+                    _read_named,
+                    reservation,
+                    committed=committed_snapshot,
+                )
                 try:
-                    yield
+                    yield handle
                 finally:
                     if reservation is not None:
                         await reservation.release()
@@ -834,19 +1027,27 @@ def TokenBucketCooldown(
             bucket[entity_id] = TokenBucketUsage(now, capacity, capacity)
         usage = bucket[entity_id]
 
-        _refill(usage, now)
+        _refill_token_bucket(usage, now, add_speed)
+
+        async def _read_unnamed() -> TokenBucketSnapshot:
+            read_time = datetime.now(tz=_tz)
+            read_usage = TokenBucketUsage(usage.last_update_time, usage.capacity, usage.available)
+            _refill_token_bucket(read_usage, read_time, add_speed)
+            return _token_bucket_snapshot(read_usage, usage.pending)
 
         if usage.available - usage.pending >= consume_size:
             if not set_increaser:
                 usage.available -= consume_size
-                yield
+                snapshot = _token_bucket_snapshot(usage, usage.pending)
+                yield TokenBucketHandle(_read_unnamed, committed=snapshot)
                 return
 
-            async def _commit_action() -> None:
+            async def _commit_action() -> TokenBucketSnapshot:
                 commit_time = datetime.now(tz=_tz)
-                _refill(usage, commit_time)
+                _refill_token_bucket(usage, commit_time, add_speed)
                 usage.pending -= consume_size
                 usage.available -= consume_size
+                return _token_bucket_snapshot(usage, usage.pending)
 
             async def _release_action() -> None:
                 usage.pending -= consume_size
@@ -854,7 +1055,7 @@ def TokenBucketCooldown(
             reservation = _reserve_increaser(state, _commit_action, _release_action)
             usage.pending += consume_size
             try:
-                yield
+                yield TokenBucketHandle(_read_unnamed, reservation)
             finally:
                 await reservation.release()
             return  # Didn't exceed

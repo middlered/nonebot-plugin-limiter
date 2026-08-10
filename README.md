@@ -77,11 +77,7 @@ from nonebot_plugin_limiter import (
 nb orm upgrade
 ```
 
-漏桶和令牌桶的新实体允许立即使用初始突发额度：漏桶从空桶开始，令牌桶从满桶开始。升级不会重置命名
-bucket 在数据库中已有的余额；新初始状态只用于之后首次出现的实体键。
-
-数据库未升级或不可用时，ORM 默认会阻止 Bot 启动；运行期间命名 bucket 的数据库事务失败会终止当前
-Matcher，不会降级为内存计数或无限放行。数据库连接和路径配置请参考
+数据库连接和路径配置请参考
 [`nonebot-plugin-orm`](https://github.com/nonebot/plugin-orm)。
 
 ## 快速上手
@@ -163,20 +159,34 @@ cmd2 = on_startswith("cmd2")
 async def _(): ...
 ```
 
-手动确认限制器使用记录，适用于没有成功完成事件处理时避免给用户添加限制。启用后，限制器会在放行时
-预占额度；业务成功时调用一次 `await Increaser.execute()`，会确认当前 Matcher 中的全部预占，并等待
-数据库提交完成。未确认的预占会在 Matcher 结束时自动释放，成功提交后重复调用 `execute()` 不会重复计数。
-命中 `BYPASS_ENTITY` 或当前没有待确认预占时仍可注入 `Increaser`，此时 `execute()` 不会产生计数；只有
-当前 Matcher 没有运行任何启用 `set_increaser` 的限制器时，注入才会抛出 `KeyError`。
+获取限制器对象，读取并单独确认限制器使用提交。
+```python
+from nonebot.permission import SUPERUSER
+from nonebot_plugin_limiter import Cooldown, FixedWindowHandle, UserScope
 
-`execute()` 是异步接口，因此确认计数的业务必须使用 `async def` Handler 并显式 `await`。预占会一直占用
-额度直到确认或 Matcher 结束，因此长时间业务处理会相应减少其他请求的可用额度。预占不会跨
-`matcher.pause()` 保留；需要等待后续事件时，应把启用 `set_increaser` 的限制器和 `await execute()` 放在
-恢复后最终执行业务的同一个 Handler 中。Matcher 已经释放预占后，迟到的 `execute()` 会抛出
-`RuntimeError`。
+cmd = on_startswith("download")
+@cmd.handle()
+async def _(
+    quota: FixedWindowHandle = Cooldown(
+        UserScope(permission=SUPERUSER),
+        "0 0 * * mon",
+        limit=5,
+        name="weekly_download",
+        reject="本周额度已用完",
+        set_increaser=True,
+    ),
+):
+    current = await quota.read()
+    if not current.bypassed:
+        await cmd.send(f"本周可用 {current.remaining} 次")
 
-命名 bucket 的已提交用量由数据库共享，但未提交的预占和并发上限只在单个 NoneBot 进程内协调；当前不保证
-多 worker 下的成功后计数不会超发。
+    await do_something()
+    snapshot = await quota.execute()
+    if not snapshot.bypassed:
+        await cmd.send(f"本周还有 {snapshot.remaining} 次")
+```
+
+批量确认限制器使用提交。
 ```python
 from nonebot_plugin_limiter import Increaser
 

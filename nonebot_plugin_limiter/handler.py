@@ -1,45 +1,28 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Annotated
+from typing import Annotated, Any, TypeVar
 
 from nonebot.message import run_postprocessor
 from nonebot.params import Depends
 from nonebot.typing import T_State
 
+from .handle import _CommitAction, _Reservation
+
 _INCREASER_STATE_KEY = "plugin_limiter:increaser"
 _AsyncAction = Callable[[], Awaitable[None]]
-
-
-class _Reservation:
-    def __init__(self, commit: _AsyncAction, release: _AsyncAction) -> None:
-        self._commit_action = commit
-        self._release_action = release
-        self._active = True
-        self._released = False
-        self._operation_lock = asyncio.Lock()
-
-    async def commit(self) -> None:
-        async with self._operation_lock:
-            if not self._active:
-                return
-            await self._commit_action()
-            self._active = False
-
-    async def release(self) -> None:
-        async with self._operation_lock:
-            if not self._active:
-                return
-            await self._release_action()
-            self._active = False
-            self._released = True
+_SnapshotT = TypeVar("_SnapshotT")
 
 
 class _Increaser:
     def __init__(self) -> None:
-        self._reservations: list[_Reservation] = []
+        self._reservations: list[_Reservation[Any]] = []
         self._operation_lock = asyncio.Lock()
 
-    def reserve(self, commit: _AsyncAction, release: _AsyncAction) -> _Reservation:
+    def reserve(
+        self,
+        commit: _CommitAction[_SnapshotT],
+        release: _AsyncAction,
+    ) -> _Reservation[_SnapshotT]:
         reservation = _Reservation(commit, release)
         self._reservations.append(reservation)
         return reservation
@@ -77,9 +60,9 @@ def _ensure_increaser(state: T_State) -> _Increaser:
 
 def _reserve_increaser(
     state: T_State,
-    commit: _AsyncAction,
+    commit: _CommitAction[_SnapshotT],
     release: _AsyncAction,
-) -> _Reservation:
+) -> _Reservation[_SnapshotT]:
     return _ensure_increaser(state).reserve(commit, release)
 
 

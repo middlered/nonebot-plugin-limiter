@@ -29,5 +29,14 @@ from .entity import PublicScope as PublicScope
 from .entity import SceneScope as SceneScope
 from .entity import UserSceneScope as UserSceneScope
 from .entity import UserScope as UserScope
+from .handle import FixedWindowHandle as FixedWindowHandle
+from .handle import FixedWindowSnapshot as FixedWindowSnapshot
+from .handle import LeakyBucketHandle as LeakyBucketHandle
+from .handle import LeakyBucketSnapshot as LeakyBucketSnapshot
+from .handle import LimiterHandle as LimiterHandle
+from .handle import SlidingWindowHandle as SlidingWindowHandle
+from .handle import SlidingWindowSnapshot as SlidingWindowSnapshot
+from .handle import TokenBucketHandle as TokenBucketHandle
+from .handle import TokenBucketSnapshot as TokenBucketSnapshot
 from .handler import Increaser as Increaser
 from .storage import LimiterStorageError as LimiterStorageError
