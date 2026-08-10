@@ -185,6 +185,3 @@ bot.py
 
 # for local dev only
 bot_testing/
-__init__.py
-!nonebot_plugin_limiter/__init__.py
-!nonebot_plugin_limiter/migrations/__init__.py
