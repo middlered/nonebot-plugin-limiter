@@ -57,13 +57,29 @@
 </details>
 
 ## 使用
-四种限流算法，自带六种限制对象，具体使用细节请阅读 docstring 。
+四种限流算法，自带六种限制对象。
 ```python
 from nonebot_plugin_limiter import (
     Cooldown, LeakyBucketCooldown, SlidingWindowCooldown, TokenBucketCooldown,
     GlobalScope, UserScope, SceneScope, UserSceneScope, PrivateScope, PublicScope
 )
 ```
+
+| 限制对象         | 额度归属                             | 场景之间的关系               |
+| ---------------- | ------------------------------------ | ---------------------------- |
+| `GlobalScope`    | 所有用户共享一个全局额度             | 所有场景共享                 |
+| `UserScope`      | 每个平台身份域中的每个用户各有额度   | 同一用户在所有场景共享       |
+| `SceneScope`     | 每个场景各有额度，场景内所有用户共享 | 不同场景相互独立             |
+| `UserSceneScope` | 每个“用户 + 场景”组合各有额度        | 同一用户在不同场景相互独立   |
+| `PrivateScope`   | 仅私聊生效，每个用户各有额度         | 同一用户的所有私聊场景共享   |
+| `PublicScope`    | 仅非私聊生效，每个用户各有额度       | 同一用户的所有非私聊场景共享 |
+
+| 限流算法                | 计算方式                                                           | 主要参数                                | 流量特征                                       |
+| ----------------------- | ------------------------------------------------------------------ | --------------------------------------- | ---------------------------------------------- |
+| `Cooldown`              | 固定周期内最多允许指定次数；周期可按时长或 cron 重置               | `period`、`limit`                       | 实现简单，周期边界附近可能连续放行两批请求     |
+| `SlidingWindowCooldown` | 统计当前时刻之前一个完整周期内的触发次数                           | `period`、`limit`                       | 限制更平滑，不受固定周期边界影响               |
+| `LeakyBucketCooldown`   | 新实体从空桶开始；请求向桶中注水，桶按固定速度漏水，超出容量时拒绝 | `capacity`、`leak_speed`、`pour_size`   | 按固定速度释放积压，适合平滑处理压力           |
+| `TokenBucketCooldown`   | 新实体从满桶开始；令牌按固定速度补充，请求消耗令牌，不足时拒绝     | `capacity`、`add_speed`、`consume_size` | 允许容量范围内的突发流量，同时限制长期平均速率 |
 
 > [!IMPORTANT]
 > 本版本不再读取或迁移旧 `limiter_data.json`，所有命名 bucket 会从空数据库重新计数；旧文件不会被

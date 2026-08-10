@@ -224,7 +224,7 @@ def Cooldown(
     参数:
         entity (CooldownEntity | _DependentCallable[str]):
             设置需要进行速率限制的对象。
-            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `GroupScope` 等。
+            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `SceneScope` 等。
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         period (int | datetime.timedelta | str):
@@ -438,7 +438,7 @@ def SlidingWindowCooldown(
     参数:
         entity (CooldownEntity | _DependentCallable[str]):
             设置需要进行速率限制的对象。
-            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `GroupScope` 等。
+            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `SceneScope` 等。
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         period (int | datetime.timedelta):
@@ -655,7 +655,7 @@ def LeakyBucketCooldown(
     参数:
         entity (CooldownEntity | _DependentCallable[str]):
             设置需要进行速率限制的对象。
-            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `GroupScope` 等。
+            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `SceneScope` 等。
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):
@@ -872,7 +872,7 @@ def TokenBucketCooldown(
     参数:
         entity (CooldownEntity | _DependentCallable[str]):
             设置需要进行速率限制的对象。
-            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `GroupScope` 等。
+            - 可传入 `CooldownEntity` 对象，如 `UserScope`, `SceneScope` 等。
             - 可传入返回值为 `str` 的函数，自定义限制对象的**唯一 ID**，支持依赖注入。
 
         capacity (int):

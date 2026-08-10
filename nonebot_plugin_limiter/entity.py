@@ -1,4 +1,4 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Literal
 
 from nonebot.adapters import Bot, Event
@@ -11,11 +11,14 @@ _IdType = str | int
 _UserWhitelistValue = _IdType | UserRef
 _SceneWhitelistValue = _IdType | SceneRef
 _UserSceneWhitelistValue = tuple[_IdType | Literal["*"] | UserRef, _IdType | Literal["*"] | SceneRef] | MemberRef
+_UserWhitelist = list[_UserWhitelistValue] | tuple[_UserWhitelistValue, ...]
+_SceneWhitelist = list[_SceneWhitelistValue] | tuple[_SceneWhitelistValue, ...]
+_UserSceneWhitelist = list[_UserSceneWhitelistValue] | tuple[_UserSceneWhitelistValue, ...]
 BYPASS_ENTITY = "__bypass"
 
 
 def _normalize_user_whitelist(
-    whitelist: tuple[_UserWhitelistValue, ...] | None,
+    whitelist: _UserWhitelist | None,
 ) -> tuple[str | UserRef, ...] | None:
     if whitelist is None:
         return None
@@ -23,7 +26,7 @@ def _normalize_user_whitelist(
 
 
 def _normalize_scene_whitelist(
-    whitelist: tuple[_SceneWhitelistValue, ...] | None,
+    whitelist: _SceneWhitelist | None,
 ) -> tuple[str | SceneRef, ...] | None:
     if whitelist is None:
         return None
@@ -39,7 +42,7 @@ def _matches_scene(value: str | SceneRef, ref: SceneRef) -> bool:
 
 
 def _normalize_user_scene_whitelist(
-    whitelist: tuple[_UserSceneWhitelistValue, ...] | None,
+    whitelist: _UserSceneWhitelist | None,
 ) -> tuple[tuple[str | UserRef, str | SceneRef] | MemberRef, ...] | None:
     """规范化用户场景白名单，同时保留 reference 的身份域。
 
@@ -68,15 +71,12 @@ def _normalize_user_scene_whitelist(
     return tuple(normalized)
 
 
-class CooldownEntity:
+class CooldownEntity(ABC):
     """
     **限制实体类**
     """
 
     __slots__ = ()
-
-    @abstractmethod
-    def __init__(self) -> None: ...
 
     @abstractmethod
     async def get_entity_id(self, bot: Bot, event: Event) -> str:
@@ -112,12 +112,12 @@ class UserScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: tuple[_UserWhitelistValue, ...] | None = None,
+        whitelist: _UserWhitelist | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
         可选参数:
-            whitelist (tuple[str | int | UserRef]):
+            whitelist (list[str | int | UserRef] | tuple[str | int | UserRef, ...]):
                 裸用户 ID 匹配任意 scope；UserRef 只匹配指定平台身份域。
             permission: (Permission):
                 NoneBot 权限，通过该权限检查的将不受限制。
@@ -151,12 +151,12 @@ class SceneScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: tuple[_SceneWhitelistValue, ...] | None = None,
+        whitelist: _SceneWhitelist | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
         可选参数:
-            whitelist (tuple[str | int | SceneRef]):
+            whitelist (list[str | int | SceneRef] | tuple[str | int | SceneRef, ...]):
                 裸场景 ID 匹配任意 scope；SceneRef 只匹配指定平台身份域和场景结构。
             permission: (Permission):
                 NoneBot 权限，通过该权限检查的将不受限制。
@@ -190,7 +190,7 @@ class UserSceneScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: tuple[_UserSceneWhitelistValue, ...] | None = None,
+        whitelist: _UserSceneWhitelist | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
@@ -245,12 +245,12 @@ class PrivateScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: tuple[_UserWhitelistValue, ...] | None = None,
+        whitelist: _UserWhitelist | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
         可选参数:
-            whitelist (tuple[str | int | UserRef]):
+            whitelist (list[str | int | UserRef] | tuple[str | int | UserRef, ...]):
                 裸用户 ID 匹配任意 scope；UserRef 只匹配指定平台身份域。
             permission: (Permission):
                 NoneBot 权限，通过该权限检查的将不受限制。
@@ -286,12 +286,12 @@ class PublicScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: tuple[_UserWhitelistValue, ...] | None = None,
+        whitelist: _UserWhitelist | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
         可选参数:
-            whitelist (tuple[str | int | UserRef]):
+            whitelist (list[str | int | UserRef] | tuple[str | int | UserRef, ...]):
                 裸用户 ID 匹配任意 scope；UserRef 只匹配指定平台身份域。
             permission: (Permission):
                 NoneBot 权限，通过该权限检查的将不受限制。

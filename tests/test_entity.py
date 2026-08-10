@@ -50,6 +50,13 @@ async def get_id(scope: CooldownEntity) -> str:
     return await scope.get_entity_id(object(), object())  # type: ignore[arg-type]
 
 
+def test_cooldown_entity_is_abstract() -> None:
+    from nonebot_plugin_limiter import CooldownEntity
+
+    with pytest.raises(TypeError, match="abstract"):
+        CooldownEntity()  # type: ignore[abstract]
+
+
 def test_reference_key_fixed_vectors() -> None:
     from nonebot_plugin_uninfo import SceneRef, SceneType, SupportScope, UserRef
 
@@ -155,7 +162,7 @@ async def test_raw_user_whitelist_remains_cross_scope(monkeypatch: pytest.Monkey
 
     from nonebot_plugin_limiter import BYPASS_ENTITY, UserScope
 
-    scope = UserScope(whitelist=("user-1",))
+    scope = UserScope(whitelist=["user-1"])
 
     async with use_session(monkeypatch, make_session(scope=SupportScope.qq_client)):
         assert await get_id(scope) == BYPASS_ENTITY
