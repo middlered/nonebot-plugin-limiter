@@ -244,6 +244,44 @@ async def test_handle_keeps_resolved_dynamic_limit() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("named", [False, True])
+@pytest.mark.parametrize(
+    ("initial_limit", "later_limits", "expected"),
+    [
+        (2, [100, 100], [True, True, False]),
+        (100, [1], [True, True]),
+    ],
+)
+async def test_fixed_window_keeps_limit_from_window_start(
+    named: bool,
+    initial_limit: int,
+    later_limits: list[int],
+    expected: list[bool],
+) -> None:
+    from nonebot.exception import FinishedException
+
+    from nonebot_plugin_limiter import Cooldown
+
+    name = f"test-fixed-window-limit-{uuid4()}" if named else None
+    marker = Cooldown(lambda: "unused", 60, limit=lambda: 1, name=name)
+    assert marker.dependency is not None
+    dependency = cast(Callable[..., AsyncGenerator[Any, None]], marker.dependency)
+
+    async def attempt(resolved_limit: int) -> bool:
+        generator = dependency({}, "user", resolved_limit, AsyncMock())
+        try:
+            await anext(generator)
+            return True
+        except FinishedException:
+            return False
+        finally:
+            await generator.aclose()
+
+    results = [await attempt(limit) for limit in [initial_limit, *later_limits]]
+    assert results == expected
+
+
+@pytest.mark.asyncio
 async def test_failed_handle_commit_can_be_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     from nonebot_plugin_limiter.storage import LimiterStorageError, get_limiter_storage
 
