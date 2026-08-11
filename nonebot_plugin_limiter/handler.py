@@ -13,10 +13,12 @@ class _FuncWrapper:
         for func in self._funcs:
             func()
 
+
 def get_increaser(state: T_State):
     ret = state.get("plugin_limiter:increaser")
     if ret is None:
         raise KeyError("Cannot get increaser, make sure you have enabled `set_increaser` in cooldown policy.")
     return _FuncWrapper(ret)
+
 
 Increaser = Annotated[_FuncWrapper, Depends(get_increaser)]

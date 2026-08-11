@@ -32,6 +32,7 @@ def _entity_id_dep_wrapper(entity: CooldownEntity | _DependentCallable[str]) -> 
         entity_id_dep = entity
     return entity_id_dep
 
+
 def _limit_dep_wrapper(limit: int | _DependentCallable[int]) -> _DependentCallable[int]:
     if isinstance(limit, int):
         limit_dep = lambda: limit  # noqa: E731
@@ -39,21 +40,26 @@ def _limit_dep_wrapper(limit: int | _DependentCallable[int]) -> _DependentCallab
         limit_dep = limit
     return limit_dep
 
+
 def _reject_dep_wrapper(reject: None | SupportMsgType | _DependentCallable[Any]) -> _DependentCallable[Any]:
     if isinstance(reject, SupportMsgType):
+
         async def _send_msg(bot: Bot, matcher: Matcher, event: Event):
             if isinstance(reject, UniMessage):
                 await reject.finish(event, bot)
             else:
                 await matcher.finish(reject)
+
         reject_func = _send_msg
-    elif reject is not None:    # callable
+    elif reject is not None:  # callable
         if not is_coroutine_callable(reject):
             reject = run_sync(reject)
         reject_func = reject
     else:
+
         async def _null():
             return None
+
         reject_func = _null
 
     async def _inject_wrapper(*args, **kwargs):
@@ -62,13 +68,15 @@ def _reject_dep_wrapper(reject: None | SupportMsgType | _DependentCallable[Any])
         return partial(reject_func, **bound.arguments)
 
     setattr(_inject_wrapper, "__signature__", inspect.signature(reject_func))
-    #_inject_wrapper.__signature__ = inspect.signature(reject_func)
+    # _inject_wrapper.__signature__ = inspect.signature(reject_func)
     return _inject_wrapper
+
 
 def inject_increaser(state: T_State, func: Callable):
     executors = state.setdefault("plugin_limiter:increaser", [])
     assert isinstance(executors, list)
     executors.append(func)
+
 
 # region: FixWindow
 @dataclass
@@ -161,7 +169,7 @@ def Cooldown(
         state: T_State,
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
-        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject))
+        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
@@ -197,7 +205,9 @@ def Cooldown(
 
     return Depends(_limiter_dependency)
 
+
 # endregion
+
 
 # region: SlidingWindow
 @dataclass
@@ -280,7 +290,7 @@ def SlidingWindowCooldown(
         state: T_State,
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
-        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject))
+        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
@@ -311,7 +321,9 @@ def SlidingWindowCooldown(
 
     return Depends(_limiter_dependency)
 
+
 # endregion
+
 
 # region: TokenBucket
 @dataclass
@@ -398,7 +410,7 @@ def TokenBucketCooldown(
         state: T_State,
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         consume_size: int = Depends(_limit_dep_wrapper(consume_size)),
-        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject))
+        reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
         if entity_id == BYPASS_ENTITY:
             return
@@ -434,5 +446,6 @@ def TokenBucketCooldown(
         raise FinishedException()
 
     return Depends(_limiter_dependency)
+
 
 # endregion

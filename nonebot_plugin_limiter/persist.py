@@ -44,6 +44,7 @@ class PersistData(BaseModel):
 
     token_bucket: dict[str, dict[str, TokenBucketSet]] | None = None
 
+
 def load_usage_data() -> None:
     """加载本地存储的用量数据"""
 
@@ -83,9 +84,9 @@ def load_usage_data() -> None:
             bucket = _TokenBucketCooldownDict[name]
             for _id, usage in usage_set.items():
                 bucket[_id] = TokenBucketUsage(
-                    last_update_time = datetime.fromtimestamp(usage.last_update_time, tz=_tz),
+                    last_update_time=datetime.fromtimestamp(usage.last_update_time, tz=_tz),
                     capacity=usage.capacity,
-                    available=usage.available
+                    available=usage.available,
                 )
 
     logger.info("Loaded previous usage data.")
@@ -118,12 +119,13 @@ def save_usage_data() -> None:
             _id: {
                 "last_update_time": int(usage.last_update_time.timestamp()),
                 "capacity": usage.capacity,
-                "available": usage.available
+                "available": usage.available,
             }
             for _id, usage in usage_set.items()
         }
 
     plugin_data_file.write_text(json.dumps(j))
+
 
 @driver.on_startup
 def _startup() -> None:
