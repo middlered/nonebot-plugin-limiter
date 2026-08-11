@@ -111,7 +111,7 @@ def get_entity_id(bot: Bot, event: Event): # 可依赖注入
     return event.get_user_id()
 
 # 异步样例。获取不同用户的最大使用量
-async def get_user_max_usage(info: Uninfo): # 推荐使用 UniMessage 和 Uninfo  
+async def get_user_max_usage(info: Uninfo): # 推荐使用 UniMessage 和 Uninfo
     user: User = await any_orm(...)
     return user.max_usage
 
@@ -132,7 +132,7 @@ cmd = on_startswith("cmd")
 async def _(): ...
 ```
 
-多命令共享使用统计集合。  
+多命令共享使用统计集合。
 > [!IMPORTANT]
 > 请确保使用相同使用统计集合的限制器限流参数一致（限制对象，限制时间，最大使用量），否则可能会有预期之外的行为。
 ```python
@@ -189,10 +189,10 @@ async def _(): ...
 dailysign = on_startswith("签到")
 @dailysign.handle(parameterless = [
     Cooldown(
-        UserScope(), 
+        UserScope(),
         "0 0 * * *", # Cooldown 支持传入 cron 格式定时任务
-        limit = 1, 
-        reject = "你今天已经签到过了！", 
+        limit = 1,
+        reject = "你今天已经签到过了！",
         name = "dailysign" # 为使用统计集合命名，实现持久化
     ),
 ])
