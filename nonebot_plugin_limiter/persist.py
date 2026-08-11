@@ -13,11 +13,9 @@ from pydantic import BaseModel, ValidationError
 from .config import plugin_config
 from .cooldown import (
     FixWindowUsage,
-    LeakyBucketUsage,
     SlidingWindowUsage,
     TokenBucketUsage,
     _FixWindowCooldownDict,
-    _LeakyBucketCooldownDict,
     _SlidingWindowCooldownDict,
     _TokenBucketCooldownDict,
     _tz,
@@ -38,13 +36,6 @@ class PersistData(BaseModel):
         timestamps: list[int]
 
     sliding_window: dict[str, dict[str, SlidingWindowSet]] | None = None
-
-    class LeakyBucketSet(BaseModel):
-        last_update_time: int
-        capacity: int
-        used: int
-
-    leaky_bucket: dict[str, dict[str, LeakyBucketSet]] | None = None
 
     class TokenBucketSet(BaseModel):
         last_update_time: int
@@ -85,18 +76,6 @@ def load_usage_data() -> None:
                     timestamps=deque(datetime.fromtimestamp(t, tz=_tz) for t in usage.timestamps)
                 )
 
-    if data.leaky_bucket is not None:
-        for name, usage_set in data.leaky_bucket.items():
-            if name not in _LeakyBucketCooldownDict:
-                _LeakyBucketCooldownDict[name] = {}
-            bucket = _LeakyBucketCooldownDict[name]
-            for _id, usage in usage_set.items():
-                bucket[_id] = LeakyBucketUsage(
-                    last_update_time = datetime.fromtimestamp(usage.last_update_time, tz=_tz),
-                    capacity=usage.capacity,
-                    used=usage.used
-                )
-
     if data.token_bucket is not None:
         for name, usage_set in data.token_bucket.items():
             if name not in _TokenBucketCooldownDict:
@@ -115,7 +94,7 @@ def load_usage_data() -> None:
 def save_usage_data() -> None:
     """保存用量数据到本地"""
 
-    j = {"fix_window": {}, "sliding_window": {}}
+    j = {"fix_window": {}, "sliding_window": {}, "token_bucket": {}}
 
     for name, usage_set in _FixWindowCooldownDict.items():
         j["fix_window"][name] = {
@@ -130,16 +109,6 @@ def save_usage_data() -> None:
         j["sliding_window"][name] = {
             _id: {
                 "timestamps": [int(t.timestamp()) for t in usage.timestamps],
-            }
-            for _id, usage in usage_set.items()
-        }
-
-    for name, usage_set in _LeakyBucketCooldownDict.items():
-        j["leaky_bucket"][name] = {
-            _id: {
-                "last_update_time": int(usage.last_update_time.timestamp()),
-                "capacity": usage.capacity,
-                "used": usage.used
             }
             for _id, usage in usage_set.items()
         }
