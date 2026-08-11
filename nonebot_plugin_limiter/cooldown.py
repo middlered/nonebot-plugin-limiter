@@ -1,5 +1,5 @@
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -20,6 +20,7 @@ from nonebot_plugin_alconna import UniMessage
 from tzlocal import get_localzone
 
 from .entity import BYPASS_ENTITY, CooldownEntity
+from .handler import _ensure_increaser
 
 _tz = get_localzone()
 SupportMsgType = str | Message | MessageSegment | MessageTemplate | UniMessage
@@ -72,17 +73,12 @@ def _reject_dep_wrapper(reject: None | SupportMsgType | _DependentCallable[Any])
     return _inject_wrapper
 
 
-def inject_increaser(state: T_State, func: Callable):
-    executors = state.setdefault("plugin_limiter:increaser", [])
-    assert isinstance(executors, list)
-    executors.append(func)
-
-
 # region: FixWindow
 @dataclass
 class FixWindowUsage:
     start_time: datetime
     available: int
+    pending: int = 0
 
 
 _FixWindowCooldownDict: dict[str, dict[str, FixWindowUsage]] = {}
@@ -170,8 +166,10 @@ def Cooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> None:
+    ) -> AsyncGenerator[None, None]:
+        increaser = _ensure_increaser(state) if set_increaser else None
         if entity_id == BYPASS_ENTITY:
+            yield
             return
 
         now = datetime.now(tz=_tz)
@@ -182,28 +180,47 @@ def Cooldown(
 
         # Calculate reset time based on when the limitation was set
         reset_time = trigger.get_next_fire_time(usage.start_time, now)
-        assert reset_time is not None, "reset_time should not be None"
+        if reset_time is None:
+            raise RuntimeError("Cooldown trigger did not provide a next fire time.")
 
         # Reset
         if now >= reset_time:
             usage.start_time = now
             usage.available = limit
 
-        def _increase_action():
-            usage.available -= 1
+        if usage.available - usage.pending > 0:
+            if increaser is None:
+                usage.available -= 1
+                yield
+                return
 
-        if usage.available > 0:
-            if set_increaser:
-                inject_increaser(state, _increase_action)
-            else:
-                _increase_action()
+            def _commit_action() -> None:
+                commit_time = datetime.now(tz=_tz)
+                reset_time = trigger.get_next_fire_time(usage.start_time, commit_time)
+                if reset_time is None:
+                    raise RuntimeError("Cooldown trigger did not provide a next fire time.")
+                if commit_time >= reset_time:
+                    usage.start_time = commit_time
+                    usage.available = limit
+                usage.pending -= 1
+                usage.available -= 1
+
+            def _release_action() -> None:
+                usage.pending -= 1
+
+            reservation = increaser.reserve(_commit_action, _release_action)
+            usage.pending += 1
+            try:
+                yield
+            finally:
+                reservation.release()
             return  # Didn't exceed
 
         # Exceeded
         await reject_cb()
         raise FinishedException()
 
-    return Depends(_limiter_dependency)
+    return Depends(_limiter_dependency, use_cache=False)
 
 
 # endregion
@@ -213,6 +230,7 @@ def Cooldown(
 @dataclass
 class SlidingWindowUsage:
     timestamps: deque[datetime] = field(default_factory=deque)
+    pending: int = 0
 
 
 _SlidingWindowCooldownDict: dict[str, dict[str, SlidingWindowUsage]] = {}
@@ -291,8 +309,10 @@ def SlidingWindowCooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> None:
+    ) -> AsyncGenerator[None, None]:
+        increaser = _ensure_increaser(state) if set_increaser else None
         if entity_id == BYPASS_ENTITY:
+            yield
             return
 
         now = datetime.now(tz=_tz)
@@ -305,21 +325,32 @@ def SlidingWindowCooldown(
         while usage.timestamps and (now - usage.timestamps[0]).total_seconds() >= window_length:
             usage.timestamps.popleft()
 
-        def _increase_action():
-            usage.timestamps.append(now)
+        if len(usage.timestamps) + usage.pending < limit:
+            if increaser is None:
+                usage.timestamps.append(now)
+                yield
+                return
 
-        if len(usage.timestamps) < limit:
-            if set_increaser:
-                inject_increaser(state, _increase_action)
-            else:
-                _increase_action()
+            def _commit_action() -> None:
+                usage.pending -= 1
+                usage.timestamps.append(datetime.now(tz=_tz))
+
+            def _release_action() -> None:
+                usage.pending -= 1
+
+            reservation = increaser.reserve(_commit_action, _release_action)
+            usage.pending += 1
+            try:
+                yield
+            finally:
+                reservation.release()
             return  # Didn't exceed
 
         # Exceeded
         await reject_cb()
         raise FinishedException()
 
-    return Depends(_limiter_dependency)
+    return Depends(_limiter_dependency, use_cache=False)
 
 
 # endregion
@@ -331,6 +362,7 @@ class TokenBucketUsage:
     last_update_time: datetime
     capacity: int
     available: int
+    pending: int = 0
 
 
 _TokenBucketCooldownDict: dict[str, dict[str, TokenBucketUsage]] = {}
@@ -411,8 +443,10 @@ def TokenBucketCooldown(
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
         consume_size: int = Depends(_limit_dep_wrapper(consume_size)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
-    ) -> None:
+    ) -> AsyncGenerator[None, None]:
+        increaser = _ensure_increaser(state) if set_increaser else None
         if entity_id == BYPASS_ENTITY:
+            yield
             return
 
         now = datetime.now(tz=_tz)
@@ -431,21 +465,41 @@ def TokenBucketCooldown(
             usage.last_update_time += timedelta(seconds=resume_size / add_speed)
         usage.available = min(usage.available + resume_size, usage.capacity)
 
-        def _increase_action():
-            usage.available -= consume_size
+        if usage.available - usage.pending >= consume_size:
+            if increaser is None:
+                usage.available -= consume_size
+                yield
+                return
 
-        if usage.available >= consume_size:
-            if set_increaser:
-                inject_increaser(state, _increase_action)
-            else:
-                _increase_action()
+            def _commit_action() -> None:
+                commit_time = datetime.now(tz=_tz)
+                elapsed_seconds = max((commit_time - usage.last_update_time).total_seconds(), 0)
+                recoverable_capacity = usage.capacity - usage.available
+                resume_size = min(int(elapsed_seconds * add_speed), recoverable_capacity) if add_speed > 0 else 0
+                if resume_size == recoverable_capacity:
+                    usage.last_update_time = commit_time
+                elif resume_size > 0:
+                    usage.last_update_time += timedelta(seconds=resume_size / add_speed)
+                usage.available = min(resume_size + usage.available, usage.capacity)
+                usage.pending -= consume_size
+                usage.available -= consume_size
+
+            def _release_action() -> None:
+                usage.pending -= consume_size
+
+            reservation = increaser.reserve(_commit_action, _release_action)
+            usage.pending += consume_size
+            try:
+                yield
+            finally:
+                reservation.release()
             return  # Didn't exceed
 
         # Exceeded
         await reject_cb()
         raise FinishedException()
 
-    return Depends(_limiter_dependency)
+    return Depends(_limiter_dependency, use_cache=False)
 
 
 # endregion
