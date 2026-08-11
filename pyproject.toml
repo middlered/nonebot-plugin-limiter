@@ -1,10 +1,10 @@
 [project]
 name = "nonebot-plugin-limiter"
-version = "0.4.3"
+version = "0.5.0"
 description = "通用消息冷却限制器"
 readme = "README.md"
 authors = [{ name = "MiddleRed", email = "middlered@outlook.com" }]
-urls = { Repository = "https://github.com/owner/nonebot-plugin-limiter" }
+urls = { Repository = "https://github.com/middlered/nonebot-plugin-limiter" }
 requires-python = ">=3.10,<4.0"
 dependencies = [
   "nonebot2>=2.4.2,<3.0.0",
