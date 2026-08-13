@@ -20,12 +20,15 @@ from nonebot_plugin_alconna import UniMessage
 from tzlocal import get_localzone
 
 from .entity import BYPASS_ENTITY, CooldownEntity
+from .entity_key import EntityKey
 
 _tz = get_localzone()
 SupportMsgType = str | Message | MessageSegment | MessageTemplate | UniMessage
 
 
-def _entity_id_dep_wrapper(entity: CooldownEntity | _DependentCallable[str]) -> _DependentCallable[str]:
+def _entity_id_dep_wrapper(
+    entity: CooldownEntity | _DependentCallable[EntityKey],
+) -> _DependentCallable[EntityKey]:
     if isinstance(entity, CooldownEntity):
         entity_id_dep = entity.get_entity_id
     else:
@@ -85,11 +88,11 @@ class FixWindowUsage:
     available: int
 
 
-_FixWindowCooldownDict: dict[str, dict[str, FixWindowUsage]] = {}
+_FixWindowCooldownDict: dict[str, dict[EntityKey, FixWindowUsage]] = {}
 
 
 def Cooldown(
-    entity: CooldownEntity | _DependentCallable[str],
+    entity: CooldownEntity | _DependentCallable[EntityKey],
     period: int | timedelta | str,
     *,
     limit: int | _DependentCallable[int] = 5,
@@ -163,11 +166,11 @@ def Cooldown(
             _FixWindowCooldownDict[name] = {}
         bucket = _FixWindowCooldownDict[name]
     else:
-        bucket: dict[str, FixWindowUsage] = {}
+        bucket: dict[EntityKey, FixWindowUsage] = {}
 
     async def _limiter_dependency(
         state: T_State,
-        entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
+        entity_id: EntityKey = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
@@ -215,11 +218,11 @@ class SlidingWindowUsage:
     timestamps: deque[datetime] = field(default_factory=deque)
 
 
-_SlidingWindowCooldownDict: dict[str, dict[str, SlidingWindowUsage]] = {}
+_SlidingWindowCooldownDict: dict[str, dict[EntityKey, SlidingWindowUsage]] = {}
 
 
 def SlidingWindowCooldown(
-    entity: CooldownEntity | _DependentCallable[str],
+    entity: CooldownEntity | _DependentCallable[EntityKey],
     period: int | timedelta,
     *,
     limit: int | _DependentCallable[int] = 5,
@@ -284,11 +287,11 @@ def SlidingWindowCooldown(
     if isinstance(name, str):
         bucket = _SlidingWindowCooldownDict.setdefault(name, {})
     else:
-        bucket: dict[str, SlidingWindowUsage] = {}
+        bucket: dict[EntityKey, SlidingWindowUsage] = {}
 
     async def _limiter_dependency(
         state: T_State,
-        entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
+        entity_id: EntityKey = Depends(_entity_id_dep_wrapper(entity)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
@@ -333,11 +336,11 @@ class TokenBucketUsage:
     available: int
 
 
-_TokenBucketCooldownDict: dict[str, dict[str, TokenBucketUsage]] = {}
+_TokenBucketCooldownDict: dict[str, dict[EntityKey, TokenBucketUsage]] = {}
 
 
 def TokenBucketCooldown(
-    entity: CooldownEntity | _DependentCallable[str],
+    entity: CooldownEntity | _DependentCallable[EntityKey],
     capacity: int,
     add_speed: int,
     *,
@@ -404,11 +407,11 @@ def TokenBucketCooldown(
             _TokenBucketCooldownDict[name] = {}
         bucket = _TokenBucketCooldownDict[name]
     else:
-        bucket: dict[str, TokenBucketUsage] = {}
+        bucket: dict[EntityKey, TokenBucketUsage] = {}
 
     async def _limiter_dependency(
         state: T_State,
-        entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
+        entity_id: EntityKey = Depends(_entity_id_dep_wrapper(entity)),
         consume_size: int = Depends(_limit_dep_wrapper(consume_size)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
