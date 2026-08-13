@@ -5,6 +5,8 @@ from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 from nonebot_plugin_uninfo import get_session
 
+from .entity_key import EntityKey, SceneUserKey, make_scene_key, make_user_key
+
 _IdType = str | int
 BYPASS_ENTITY = "__bypass"
 
@@ -20,7 +22,7 @@ class CooldownEntity:
     def __init__(self) -> None: ...
 
     @abstractmethod
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         """
         返回被限制实体的唯一标识符，统一为 str
         """
@@ -37,7 +39,7 @@ class GlobalScope(CooldownEntity):
     def __init__(self) -> None:
         pass
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         return "__global"
 
 
@@ -67,7 +69,7 @@ class UserScope(CooldownEntity):
             self.whitelist = None
         self.permission = permission
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         sess = await get_session(bot, event)
         if sess is None:
             return BYPASS_ENTITY
@@ -77,7 +79,7 @@ class UserScope(CooldownEntity):
             return BYPASS_ENTITY
         if self.permission is not None and (await self.permission(bot, event)):
             return BYPASS_ENTITY
-        return f"u`{user_id}`"
+        return make_user_key(sess.scope, user_id)
 
 
 class SceneScope(CooldownEntity):
@@ -104,7 +106,7 @@ class SceneScope(CooldownEntity):
             self.whitelist = None
         self.permission = permission
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         sess = await get_session(bot, event)
         if sess is None:
             return BYPASS_ENTITY
@@ -114,7 +116,12 @@ class SceneScope(CooldownEntity):
             return BYPASS_ENTITY
         if self.permission is not None and (await self.permission(bot, event)):
             return BYPASS_ENTITY
-        return f"s`{scene_id}`"
+        return make_scene_key(
+            sess.scope,
+            scene_id,
+            sess.scene.type,
+            sess.scene.parent.id if sess.scene.parent else None,
+        )
 
 
 class UserSceneScope(CooldownEntity):
@@ -149,7 +156,7 @@ class UserSceneScope(CooldownEntity):
             self.whitelist = None
         self.permission = permission
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         sess = await get_session(bot, event)
         if sess is None:
             return BYPASS_ENTITY
@@ -162,7 +169,13 @@ class UserSceneScope(CooldownEntity):
                     return BYPASS_ENTITY
         if self.permission is not None and (await self.permission(bot, event)):
             return BYPASS_ENTITY
-        return f"u`{user_id}`_s`{scene_id}`"
+        scene_key = make_scene_key(
+            sess.scope,
+            scene_id,
+            sess.scene.type,
+            sess.scene.parent.id if sess.scene.parent else None,
+        )
+        return SceneUserKey(scene_key, user_id)
 
 
 class PrivateScope(CooldownEntity):
@@ -191,7 +204,7 @@ class PrivateScope(CooldownEntity):
             self.whitelist = None
         self.permission = permission
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         sess = await get_session(bot, event)
         if sess is None or not sess.scene.is_private:
             return BYPASS_ENTITY
@@ -201,7 +214,7 @@ class PrivateScope(CooldownEntity):
             return BYPASS_ENTITY
         if self.permission is not None and (await self.permission(bot, event)):
             return BYPASS_ENTITY
-        return f"u`{user_id}`"
+        return make_user_key(sess.scope, user_id)
 
 
 class PublicScope(CooldownEntity):
@@ -230,7 +243,7 @@ class PublicScope(CooldownEntity):
             self.whitelist = None
         self.permission = permission
 
-    async def get_entity_id(self, bot: Bot, event: Event) -> str:
+    async def get_entity_id(self, bot: Bot, event: Event) -> EntityKey:
         sess = await get_session(bot, event)
         if sess is None or sess.scene.is_private:
             return BYPASS_ENTITY
@@ -240,4 +253,4 @@ class PublicScope(CooldownEntity):
             return BYPASS_ENTITY
         if self.permission is not None and (await self.permission(bot, event)):
             return BYPASS_ENTITY
-        return f"u`{user_id}`"
+        return make_user_key(sess.scope, user_id)

@@ -20,6 +20,7 @@ from .cooldown import (
     _TokenBucketCooldownDict,
     _tz,
 )
+from .entity_key import deserialize_entity_key, serialize_entity_key
 
 driver = get_driver()
 plugin_data_file: Path = store.get_plugin_data_file("limiter_data.json")
@@ -62,7 +63,7 @@ def load_usage_data() -> None:
                 _FixWindowCooldownDict[name] = {}
             bucket = _FixWindowCooldownDict[name]
             for _id, usage in usage_set.items():
-                bucket[_id] = FixWindowUsage(
+                bucket[deserialize_entity_key(_id)] = FixWindowUsage(
                     start_time=datetime.fromtimestamp(usage.start_time, tz=_tz),
                     available=usage.available,
                 )
@@ -73,7 +74,7 @@ def load_usage_data() -> None:
                 _SlidingWindowCooldownDict[name] = {}
             bucket = _SlidingWindowCooldownDict[name]
             for _id, usage in usage_set.items():
-                bucket[_id] = SlidingWindowUsage(
+                bucket[deserialize_entity_key(_id)] = SlidingWindowUsage(
                     timestamps=deque(datetime.fromtimestamp(t, tz=_tz) for t in usage.timestamps)
                 )
 
@@ -83,7 +84,7 @@ def load_usage_data() -> None:
                 _TokenBucketCooldownDict[name] = {}
             bucket = _TokenBucketCooldownDict[name]
             for _id, usage in usage_set.items():
-                bucket[_id] = TokenBucketUsage(
+                bucket[deserialize_entity_key(_id)] = TokenBucketUsage(
                     last_update_time=datetime.fromtimestamp(usage.last_update_time, tz=_tz),
                     capacity=usage.capacity,
                     available=usage.available,
@@ -99,7 +100,7 @@ def save_usage_data() -> None:
 
     for name, usage_set in _FixWindowCooldownDict.items():
         j["fix_window"][name] = {
-            _id: {
+            serialize_entity_key(_id): {
                 "start_time": int(usage.start_time.timestamp()),
                 "available": usage.available,
             }
@@ -108,7 +109,7 @@ def save_usage_data() -> None:
 
     for name, usage_set in _SlidingWindowCooldownDict.items():
         j["sliding_window"][name] = {
-            _id: {
+            serialize_entity_key(_id): {
                 "timestamps": [int(t.timestamp()) for t in usage.timestamps],
             }
             for _id, usage in usage_set.items()
@@ -116,7 +117,7 @@ def save_usage_data() -> None:
 
     for name, usage_set in _TokenBucketCooldownDict.items():
         j["token_bucket"][name] = {
-            _id: {
+            serialize_entity_key(_id): {
                 "last_update_time": int(usage.last_update_time.timestamp()),
                 "capacity": usage.capacity,
                 "available": usage.available,
