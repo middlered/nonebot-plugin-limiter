@@ -58,9 +58,7 @@ def load_usage_data() -> None:
 
     if data.fix_window is not None:
         for name, usage_set in data.fix_window.items():
-            if name not in _FixWindowCooldownDict:
-                _FixWindowCooldownDict[name] = {}
-            bucket = _FixWindowCooldownDict[name]
+            bucket = _FixWindowCooldownDict.setdefault(name, {})
             for _id, usage in usage_set.items():
                 bucket[_id] = FixWindowUsage(
                     start_time=datetime.fromtimestamp(usage.start_time, tz=_tz),
@@ -69,9 +67,7 @@ def load_usage_data() -> None:
 
     if data.sliding_window is not None:
         for name, usage_set in data.sliding_window.items():
-            if name not in _SlidingWindowCooldownDict:
-                _SlidingWindowCooldownDict[name] = {}
-            bucket = _SlidingWindowCooldownDict[name]
+            bucket = _SlidingWindowCooldownDict.setdefault(name, {})
             for _id, usage in usage_set.items():
                 bucket[_id] = SlidingWindowUsage(
                     timestamps=deque(datetime.fromtimestamp(t, tz=_tz) for t in usage.timestamps)
@@ -79,9 +75,7 @@ def load_usage_data() -> None:
 
     if data.token_bucket is not None:
         for name, usage_set in data.token_bucket.items():
-            if name not in _TokenBucketCooldownDict:
-                _TokenBucketCooldownDict[name] = {}
-            bucket = _TokenBucketCooldownDict[name]
+            bucket = _TokenBucketCooldownDict.setdefault(name, {})
             for _id, usage in usage_set.items():
                 bucket[_id] = TokenBucketUsage(
                     last_update_time=datetime.fromtimestamp(usage.last_update_time, tz=_tz),

@@ -159,9 +159,7 @@ def Cooldown(
     trigger = cast(BaseTrigger, trigger)
 
     if isinstance(name, str):
-        if name not in _FixWindowCooldownDict.keys():
-            _FixWindowCooldownDict[name] = {}
-        bucket = _FixWindowCooldownDict[name]
+        bucket = _FixWindowCooldownDict.setdefault(name, {})
     else:
         bucket: dict[str, FixWindowUsage] = {}
 
@@ -175,10 +173,7 @@ def Cooldown(
             return
 
         now = datetime.now(tz=_tz)
-
-        if entity_id not in bucket:
-            bucket[entity_id] = FixWindowUsage(now, limit)
-        usage = bucket[entity_id]
+        usage = bucket.setdefault(entity_id, FixWindowUsage(now, limit))
 
         # Calculate reset time based on when the limitation was set
         reset_time = trigger.get_next_fire_time(usage.start_time, now)
@@ -296,10 +291,7 @@ def SlidingWindowCooldown(
             return
 
         now = datetime.now(tz=_tz)
-
-        if entity_id not in bucket:
-            bucket[entity_id] = SlidingWindowUsage()
-        usage = bucket[entity_id]
+        usage = bucket.setdefault(entity_id, SlidingWindowUsage())
 
         # Drop old timestamps
         while usage.timestamps and (now - usage.timestamps[0]).total_seconds() >= window_length:
@@ -400,9 +392,7 @@ def TokenBucketCooldown(
     """
 
     if isinstance(name, str):
-        if name not in _TokenBucketCooldownDict.keys():
-            _TokenBucketCooldownDict[name] = {}
-        bucket = _TokenBucketCooldownDict[name]
+        bucket = _TokenBucketCooldownDict.setdefault(name, {})
     else:
         bucket: dict[str, TokenBucketUsage] = {}
 
@@ -416,15 +406,13 @@ def TokenBucketCooldown(
             return
 
         now = datetime.now(tz=_tz)
-
-        if entity_id not in bucket:
-            bucket[entity_id] = TokenBucketUsage(now, capacity, capacity)
-        usage = bucket[entity_id]
+        usage = bucket.setdefault(entity_id, TokenBucketUsage(now, capacity, capacity))
 
         # Update bucket token count
         elapsed_seconds = max((now - usage.last_update_time).total_seconds(), 0)
         recoverable_capacity = usage.capacity - usage.available
         resume_size = min(int(elapsed_seconds * add_speed), recoverable_capacity) if add_speed > 0 else 0
+
         if resume_size == recoverable_capacity:
             usage.last_update_time = now
         elif resume_size > 0:
