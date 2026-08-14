@@ -92,6 +92,7 @@ def Cooldown(
     entity: CooldownEntity | _DependentCallable[str],
     period: int | timedelta | str,
     *,
+    consume_size: int | _DependentCallable[int] = 1,
     limit: int | _DependentCallable[int] = 5,
     reject: SupportMsgType | _DependentCallable[Any] | None = None,
     set_increaser: bool = False,
@@ -112,6 +113,10 @@ def Cooldown(
             设置速率限制的重置时间。
             - 若为 `int` 或 `datetime.timedelta`，表示周期开始后经过指定时间后重置限制。
             - 若为 `str`，应为合法的 cron 表达式，表示按计划任务方式重置限制。
+
+        consume_size (int, _DependentCallable[int]):
+            可选，设置每次触发时会消耗的次数。默认为 1。
+            - 可传入返回值为 `int` 的函数，自定义消耗数量，支持依赖注入。
 
         limit (int | _DependentCallable[int]):
             可选，设置在每个周期内允许的最大触发次数。默认为 5。
@@ -166,6 +171,7 @@ def Cooldown(
     async def _limiter_dependency(
         state: T_State,
         entity_id: str = Depends(_entity_id_dep_wrapper(entity)),
+        consume_size: int = Depends(_limit_dep_wrapper(consume_size)),
         limit: int = Depends(_limit_dep_wrapper(limit)),
         reject_cb: Callable[..., Awaitable[Any]] = Depends(_reject_dep_wrapper(reject)),
     ) -> None:
@@ -185,9 +191,9 @@ def Cooldown(
             usage.available = limit
 
         def _increase_action():
-            usage.available -= 1
+            usage.available -= consume_size
 
-        if usage.available > 0:
+        if usage.available >= consume_size:
             if set_increaser:
                 inject_increaser(state, _increase_action)
             else:
