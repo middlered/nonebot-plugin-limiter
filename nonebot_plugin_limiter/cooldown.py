@@ -41,7 +41,7 @@ def _limit_dep_wrapper(limit: int | _DependentCallable[int]) -> _DependentCallab
     return limit_dep
 
 
-def _reject_dep_wrapper(reject: None | SupportMsgType | _DependentCallable[Any]) -> _DependentCallable[Any]:
+def _reject_dep_wrapper(reject: SupportMsgType | _DependentCallable[Any] | None) -> _DependentCallable[Any]:
     if isinstance(reject, SupportMsgType):
 
         async def _send_msg(bot: Bot, matcher: Matcher, event: Event):
@@ -93,9 +93,9 @@ def Cooldown(
     period: int | timedelta | str,
     *,
     limit: int | _DependentCallable[int] = 5,
-    reject: None | SupportMsgType | _DependentCallable[Any] = None,
+    reject: SupportMsgType | _DependentCallable[Any] | None = None,
     set_increaser: bool = False,
-    name: None | str = None,
+    name: str | None = None,
 ):
     """
     **固定窗口速率限制**
@@ -223,9 +223,9 @@ def SlidingWindowCooldown(
     period: int | timedelta,
     *,
     limit: int | _DependentCallable[int] = 5,
-    reject: None | SupportMsgType | _DependentCallable[Any] = None,
+    reject: SupportMsgType | _DependentCallable[Any] | None = None,
     set_increaser: bool = False,
-    name: None | str = None,
+    name: str | None = None,
 ):
     """
     **滑动窗口速率限制**
@@ -342,9 +342,9 @@ def TokenBucketCooldown(
     add_speed: int,
     *,
     consume_size: int | _DependentCallable[int] = 10,
-    reject: None | SupportMsgType | _DependentCallable[Any] = None,
+    reject: SupportMsgType | _DependentCallable[Any] | None = None,
     set_increaser: bool = False,
-    name: None | str = None,
+    name: str | None = None,
 ):
     """
     **令牌桶算法限制器**

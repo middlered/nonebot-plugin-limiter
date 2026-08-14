@@ -50,7 +50,7 @@ class UserScope(CooldownEntity):
     注意：不同平台的用户 ID 在不同场景可能不同，使用时请注意实际平台实现。
     """
 
-    def __init__(self, *, whitelist: None | tuple[_IdType, ...] = None, permission: Permission | None = None) -> None:
+    def __init__(self, *, whitelist: tuple[_IdType, ...] | None = None, permission: Permission | None = None) -> None:
         """
         可选参数:
             whitelist (tuple[str | int]):
@@ -87,7 +87,7 @@ class SceneScope(CooldownEntity):
     限制每个场景下在该场景内的所有用户使用情况。
     """
 
-    def __init__(self, *, whitelist: None | tuple[_IdType, ...] = None, permission: Permission | None = None) -> None:
+    def __init__(self, *, whitelist: tuple[_IdType, ...] | None = None, permission: Permission | None = None) -> None:
         """
         可选参数:
             whitelist (tuple[str | int]):
@@ -127,7 +127,7 @@ class UserSceneScope(CooldownEntity):
     def __init__(
         self,
         *,
-        whitelist: None | tuple[tuple[_IdType | Literal["*"], _IdType | Literal["*"]], ...] = None,
+        whitelist: tuple[tuple[_IdType | Literal["*"], _IdType | Literal["*"]], ...] | None = None,
         permission: Permission | None = None,
     ) -> None:
         """
@@ -174,7 +174,7 @@ class PrivateScope(CooldownEntity):
     注意：不同平台的用户 ID 在不同场景可能不同，使用时请注意实际平台实现。
     """
 
-    def __init__(self, *, whitelist: None | tuple[_IdType, ...] = None, permission: Permission | None = None) -> None:
+    def __init__(self, *, whitelist: tuple[_IdType, ...] | None = None, permission: Permission | None = None) -> None:
         """
         可选参数:
             whitelist (tuple[str | int]):
@@ -213,7 +213,7 @@ class PublicScope(CooldownEntity):
     注意：不同平台的用户 ID 在不同场景可能不同，使用时请注意实际平台实现。
     """
 
-    def __init__(self, *, whitelist: None | tuple[_IdType, ...] = None, permission: Permission | None = None) -> None:
+    def __init__(self, *, whitelist: tuple[_IdType, ...] | None = None, permission: Permission | None = None) -> None:
         """
         可选参数:
             whitelist (tuple[str | int]):
