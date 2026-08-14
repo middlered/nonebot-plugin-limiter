@@ -60,8 +60,15 @@
 三种限流算法，自带六种限制对象，具体使用细节请阅读 docstring 。
 ```python
 from nonebot_plugin_limiter import (
-    Cooldown, SlidingWindowCooldown, TokenBucketCooldown,
-    GlobalScope, UserScope, SceneScope, UserSceneScope, PrivateScope, PublicScope
+    Cooldown,
+    SlidingWindowCooldown,
+    TokenBucketCooldown,
+    GlobalScope,
+    UserScope,
+    SceneScope,
+    UserSceneScope,
+    PrivateScope,
+    PublicScope,
 )
 ```
 配置项
@@ -84,18 +91,21 @@ require("nonebot_plugin_limiter")
 from nonebot_plugin_limiter import UserScope, Cooldown
 
 matcher = on()
-@matcher.handle(parameterless=[
-    Cooldown(
-        UserScope(  # entity, `UserScope` 统计范围为所有用户在任意场景的使用量
-            whitelist=[114514, 'justAuserId'],
-            permission=SUPERUSER
-        ),    # 两种白名单方式
-        5,    # period, 冷却时长，单位为秒
-        limit = 2,  # 最大触发次数
-        reject = "操作过于频繁，请稍后再试。", # 可选，超额使用时的提示词
-        name = "my_limiter" # 可选，使用统计集合名称，填写名称将开启该集合的持久化
-    )
-])
+
+
+@matcher.handle(
+    parameterless=[
+        Cooldown(
+            UserScope(  # entity, `UserScope` 统计范围为所有用户在任意场景的使用量
+                whitelist=[114514, "justAuserId"], permission=SUPERUSER
+            ),  # 两种白名单方式
+            5,  # period, 冷却时长，单位为秒
+            limit=2,  # 最大触发次数
+            reject="操作过于频繁，请稍后再试。",  # 可选，超额使用时的提示词
+            name="my_limiter",  # 可选，使用统计集合名称，填写名称将开启该集合的持久化
+        )
+    ]
+)
 async def handler(): ...
 ```
 
@@ -125,10 +135,14 @@ async def _():
 串联多个限制器。
 ```python
 cmd = on_startswith("cmd")
-@cmd.handle(parameterless=[
-    Cooldown(UserScope(), 2, limit = 2, reject = "UserScope reject"),
-    Cooldown(GlobalScope(), 3600, limit = 4, reject = "GlobalScope reject")
-])
+
+
+@cmd.handle(
+    parameterless=[
+        Cooldown(UserScope(), 2, limit=2, reject="UserScope reject"),
+        Cooldown(GlobalScope(), 3600, limit=4, reject="GlobalScope reject"),
+    ]
+)
 async def _(): ...
 ```
 
@@ -138,15 +152,16 @@ async def _(): ...
 ```python
 # 注意，不同限流算法下的使用统计集合无法共享
 cmd1 = on_startswith("cmd1")
-@cmd1.handle(parameterless=[
-    Cooldown(UserScope(), 100, limit = 2, reject="reject1", name="shared_set")
-])
+
+
+@cmd1.handle(parameterless=[Cooldown(UserScope(), 100, limit=2, reject="reject1", name="shared_set")])
 async def _(): ...
 
+
 cmd2 = on_startswith("cmd2")
-@cmd2.handle(parameterless=[
-    Cooldown(UserScope(), 100, limit = 2, reject="reject2", name="shared_set")
-])
+
+
+@cmd2.handle(parameterless=[Cooldown(UserScope(), 100, limit=2, reject="reject2", name="shared_set")])
 async def _(): ...
 ```
 
@@ -171,31 +186,41 @@ async def _(increaser: Increaser):
 from nonebot.matcher import Matcher
 from nonebot_plugin_alconna import UniMessage
 
+
 async def reject_callback(bot: Bot, matcher: Matcher):
     await matcher.finish("Quota exceeded.")
 
+
 cmd = on_startswith("cmd")
-@cmd.handle(parameterless=[
-    Cooldown(UserScope(), 10, reject="Quota exceeded"),
-    Cooldown(UserScope(), 20, reject=MessageSegment.text("Quota exceeded.")),
-    Cooldown(UserScope(), 30, reject=UniMessage.text("Quota exceeded.")),
-    Cooldown(UserScope(), 40, reject=reject_callback)   # 试验性支持
-])
+
+
+@cmd.handle(
+    parameterless=[
+        Cooldown(UserScope(), 10, reject="Quota exceeded"),
+        Cooldown(UserScope(), 20, reject=MessageSegment.text("Quota exceeded.")),
+        Cooldown(UserScope(), 30, reject=UniMessage.text("Quota exceeded.")),
+        Cooldown(UserScope(), 40, reject=reject_callback),  # 试验性支持
+    ]
+)
 async def _(): ...
 ```
 
 使用固定窗口策略实现每日签到。
 ```python
 dailysign = on_startswith("签到")
-@dailysign.handle(parameterless = [
-    Cooldown(
-        UserScope(), 
-        "0 0 * * *", # Cooldown 支持传入 cron 格式定时任务
-        limit = 1, 
-        reject = "你今天已经签到过了！", 
-        name = "dailysign" # 为使用统计集合命名，实现持久化
-    ),
-])
+
+
+@dailysign.handle(
+    parameterless=[
+        Cooldown(
+            UserScope(),
+            "0 0 * * *",  # Cooldown 支持传入 cron 格式定时任务
+            limit=1,
+            reject="你今天已经签到过了！",
+            name="dailysign",  # 为使用统计集合命名，实现持久化
+        ),
+    ]
+)
 async def _():
     await dailysign.finish("签到成功！")
 ```
@@ -203,7 +228,7 @@ async def _():
 ### Feature
 - [x] 固定窗口
 - [x] 滑动窗口
-- [x] 漏桶
+- ~~[] 漏桶~~（已废弃，请使用令牌桶）
 - [x] 令牌桶
 - [x] reject 依赖注入回调函数（试验性支持）
 - [ ] 重置用量
