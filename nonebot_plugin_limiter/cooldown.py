@@ -43,24 +43,24 @@ def _limit_dep_wrapper(limit: int | _DependentCallable[int]) -> _DependentCallab
 
 def _reject_dep_wrapper(reject: SupportMsgType | _DependentCallable[Any] | None) -> _DependentCallable[Any]:
     if isinstance(reject, SupportMsgType):
+        # exposing signature for DI
+        async def wrapper(bot: Bot, matcher: Matcher, event: Event):
+            async def _send_msg():
+                if isinstance(reject, UniMessage):
+                    await reject.finish(event, bot)
+                else:
+                    await matcher.finish(reject)
+            return _send_msg
+        return wrapper
 
-        async def _send_msg(bot: Bot, matcher: Matcher, event: Event):
-            if isinstance(reject, UniMessage):
-                await reject.finish(event, bot)
-            else:
-                await matcher.finish(reject)
-
-        reject_func = _send_msg
-    elif reject is not None:  # callable
+    # experimental: support custom function as dependency
+    if reject is not None:  # any possible callable
         if not is_coroutine_callable(reject):
             reject = run_sync(reject)
+
         reject_func = reject
     else:
-
-        async def _null():
-            return None
-
-        reject_func = _null
+        reject_func = run_sync(lambda: None)
 
     async def _inject_wrapper(*args, **kwargs):
         sig = inspect.signature(reject_func)
