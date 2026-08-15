@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-limiter"
-version = "0.5.0"
+version = "0.6.0"
 description = "通用消息冷却限制器"
 readme = "README.md"
 authors = [{ name = "MiddleRed", email = "middlered@outlook.com" }]
